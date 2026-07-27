@@ -1,0 +1,10 @@
+{
+  "//": "Repos that carry a COPY of the codex-agent skill at .claude/skills/codex-agent/SKILL.md.",
+  "//why": "FALLBACK ONLY. The primary route is a `claude` shell wrapper in ~/.zshrc passing --plugin-dir, which loads this as a real plugin in every directory. These copies exist for `claude` invoked from a script or hook, where a shell function does not exist. Worktrees deliberately do NOT get copies — the wrapper covers them, and syncing 64 of them was churn for no gain.",
+  "//paths": "Relative to $HOME. Targets that do not exist on this machine are skipped, so the same list is valid across machines. Additional private targets come from CODEX_AGENT_SKILL_TARGETS (colon-separated, $HOME-relative) so no internal repo name is committed to this public repo.",
+  "//notinhere": "slopweaver is deliberately NOT a target. It documents how to LOAD this plugin rather than carrying a competing copy of the skill — one door means one skill, and a second SKILL.md anywhere is a second door Claude can trigger.",
+  "source": "plugins/codex-agent/skills/codex-agent/SKILL.md",
+  "targets": [
+    "dev/personal/codex-agent"
+  ]
+}

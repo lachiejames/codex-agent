@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Bun
+bun.lockb
+
+# Machine-local direnv config. Sets GH_CONFIG_DIR so `gh` uses the personal account in
+# this folder. Never committed: it is per-machine, and it named the author's accounts.
+.envrc
+
+# Agent run artifacts. Upstream committed theirs, which shipped absolute paths from
+# another person's machine into what is now a public repo.
+.agent/

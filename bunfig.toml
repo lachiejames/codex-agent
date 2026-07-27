@@ -1,0 +1,12 @@
+# Per-test timeout, raised from Bun's 5000ms default.
+#
+# Several tests spawn a real `bun run src/cli.ts` subprocess or wait on a signal file, so
+# they are bounded by process startup and filesystem latency rather than by any logic
+# under test. At 5s they pass on an idle machine and fail on a busy one — which is the
+# same defect class as the time-bomb fixtures this fork inherited: a test that goes red
+# for a reason unrelated to the code teaches you to ignore the suite.
+#
+# These tests do not assert anything about speed, so a generous bound costs nothing. A
+# genuine hang still fails, just later.
+[test]
+timeout = 30000

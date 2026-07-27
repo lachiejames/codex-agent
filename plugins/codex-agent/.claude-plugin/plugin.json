@@ -1,0 +1,8 @@
+{
+  "name": "codex-agent",
+  "description": "Orchestrate OpenAI Codex agents from Claude Code via tmux sessions, under an enforced invocation contract",
+  "author": {
+    "name": "lachiejames",
+    "url": "https://github.com/lachiejames"
+  }
+}
