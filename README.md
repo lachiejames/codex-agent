@@ -123,15 +123,8 @@ That loads it as a real plugin in every session and every directory — branches
 `--plugin-dir` is additive and repeatable, so passing it again yourself adds to this rather than replacing
 it, and `--resume`/`--continue`/subcommands are unaffected.
 
-A shell function does not exist for `claude` invoked from a script or hook, so per-repo **copies** remain as
-a fallback:
-
-```bash
-bash scripts/sync-skill.sh      # byte-identical copies to every repo in skill-targets.json
-bun test                        # fails loudly if a copy has drifted
-```
-
-Never edit a copy — edit `plugins/codex-agent/skills/codex-agent/SKILL.md` and re-sync.
+There is deliberately **no second copy**. One skill, one file, one door — a byte-identical duplicate is
+still a second skill Claude has to choose between, and it needs machinery to stay honest.
 
 ## Verify and maintain
 

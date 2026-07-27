@@ -141,30 +141,43 @@ fi
 
 # ---------------------------------------------------------------------------
 if [ "$DO_SKILLS" = "1" ]; then
-  section "6. The skill loads where it is supposed to (slow)"
-  targets=$(bun --print "JSON.parse(require('fs').readFileSync('$REPO/skill-targets.json','utf8')).targets.join('\n')")
-  while IFS= read -r t; do
-    [ -z "$t" ] && continue
-    [ -d "$HOME/$t" ] || continue
-    answer=$(cd "$HOME/$t" && timeout 200 claude -p \
-      "Do you have a skill named codex-agent available? Answer only YES or NO." 2>/dev/null | tail -1)
-    [ "$answer" = "YES" ] && ok "$t loads the codex-agent skill" \
-                          || bad "$t did NOT load the skill (answered: ${answer:-nothing})"
-  done <<<"$targets"
+  section "6. Exactly ONE door, everywhere (slow)"
 
-  # slopweaver carries its own native version, and it lives on a branch until the PR
-  # merges. Checking out main legitimately removes the file, so absence is "not here
-  # yet", not a failure — reporting it as broken would train you to ignore this script.
-  SW="$HOME/dev/personal/slopweaver"
-  if [ ! -d "$SW" ]; then
-    :
-  elif [ ! -f "$SW/skills/codex-orchestration/SKILL.md" ]; then
-    skip "slopweaver: skill not on the checked-out branch ($(git -C "$SW" branch --show-current)) — it is on feat/codex-orchestration"
+  # Inverted deliberately. This used to assert that per-repo skill COPIES loaded, and that
+  # slopweaver shipped its own rival codex skill — i.e. it asserted the second door existed.
+  # The rule now is the opposite: the plugin loads everywhere via the ~/.zshrc --plugin-dir
+  # wrapper, and NO other Codex-teaching skill may be visible anywhere. A byte-identical
+  # duplicate still counts: it shows up as a second skill Claude has to choose between.
+  #
+  # Uses a login shell so the wrapper is in scope, and `claude` must be reached as a shell
+  # FUNCTION — `timeout claude` would exec the binary directly and bypass it.
+  for probe in "$HOME/dev/personal/codex-agent" "$HOME" "$HOME/dev/ev-admin"; do
+    [ -d "$probe" ] || continue
+    label="${probe/#$HOME/~}"
+    names=$(timeout 250 zsh -lic "cd '$probe' && claude -p \
+      'List every skill you have whose name contains codex. Exact names, one per line, nothing else.'" \
+      2>/dev/null | grep -oE '[A-Za-z0-9_.:-]*codex[A-Za-z0-9_.:-]*' | sort -u)
+
+    if [ -z "$names" ]; then
+      bad "$label: the codex-agent skill did NOT load — is the claude() wrapper in ~/.zshrc?"
+      continue
+    fi
+    if [ "$names" = "codex-agent:codex-agent" ]; then
+      ok "$label: exactly one door (codex-agent:codex-agent)"
+    else
+      bad "$label: more than one Codex route visible:"
+      printf '        %s\n' $names
+    fi
+  done
+
+  # No per-repo copy may exist. These were deleted along with the sync machinery; if one
+  # reappears, something re-created a second instruction store.
+  copies=$(find "$HOME/dev" -maxdepth 4 -path "*/.claude/skills/codex-agent/SKILL.md" 2>/dev/null)
+  if [ -z "$copies" ]; then
+    ok "no per-repo skill copies exist"
   else
-    answer=$(cd "$SW" && timeout 200 claude --plugin-dir . -p \
-      "Do you have a skill named codex-orchestration available? Answer only YES or NO." 2>/dev/null | tail -1)
-    [ "$answer" = "YES" ] && ok "slopweaver ships codex-orchestration as a plugin skill" \
-                          || bad "slopweaver plugin skill present but NOT loaded (answered: ${answer:-nothing})"
+    bad "a per-repo skill copy has reappeared:"
+    printf '        %s\n' $copies
   fi
 fi
 

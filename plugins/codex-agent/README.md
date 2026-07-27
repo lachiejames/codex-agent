@@ -19,15 +19,15 @@ Codex never edits anything. Every pass is `read-only`; write access requires an 
 ## Installation
 
 An enterprise policy on this machine blocks plugin marketplaces from every source — local directory,
-GitHub, and `~/.claude/skills` — enforced at load time, not just on add. So this is **not** installed as a
-marketplace plugin. The skill is delivered as per-repo copies:
+GitHub, and `~/.claude/skills` — enforced at load time, not just on add. So it loads from disk instead,
+via a `claude()` wrapper in `~/.zshrc`:
 
 ```bash
-bash scripts/sync-skill.sh   # from the repo root
+claude() { command claude --plugin-dir "$HOME/dev/personal/codex-agent/plugins/codex-agent" "$@"; }
 ```
 
-That writes byte-identical copies to `.claude/skills/codex-agent/SKILL.md` in every repo listed in
-`skill-targets.json`. `bun test` fails if a copy drifts. Never edit a copy.
+`--plugin-dir` is additive and repeatable, so passing it yourself adds to this. That covers every
+directory, so there are no per-repo copies to keep in sync.
 
 The CLI itself is independent of all of that:
 

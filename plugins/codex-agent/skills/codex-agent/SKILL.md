@@ -19,19 +19,13 @@ triggers:
   SOURCE OF TRUTH: lachiejames/codex-agent
     plugins/codex-agent/skills/codex-agent/SKILL.md
 
-  PRIMARY delivery: a `claude` shell wrapper in ~/.zshrc passes --plugin-dir at this
-  plugin, so it loads as a real plugin in every session, in every directory. An enterprise
-  policy blocks the marketplace route, and --plugin-dir has no settings key, hence a
-  wrapper.
+  THE ONE DOOR. This file is the only place Codex invocation is taught. It loads as a real
+  Claude Code plugin via a `claude()` wrapper in ~/.zshrc passing --plugin-dir, which works
+  in every directory — branches and worktrees included.
 
-  FALLBACK: byte-identical copies at .claude/skills/codex-agent/SKILL.md in the repos
-  listed in skill-targets.json, for `claude` invoked from a script or hook where a shell
-  function does not exist.
-
-  Do NOT edit a copy. Edit this file, then run:
-    bash ~/dev/personal/codex-agent/scripts/sync-skill.sh
-
-  `bun test` in the codex-agent repo fails if any copy has drifted.
+  There is deliberately NO second copy anywhere. Per-repo copies used to exist as a
+  "fallback" for `claude` invoked from a script or hook; that scenario was never real, and a
+  byte-identical duplicate still shows up as a SECOND skill Claude has to choose between.
 -->
 
 # codex-agent
