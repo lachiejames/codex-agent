@@ -3,6 +3,7 @@ import { config } from "./config.ts";
 import {
   DEFAULT_HEARTBEAT_EXECS,
   DEFAULT_HEARTBEAT_MINUTES,
+  LEDGER_HEADER,
   PASS_PROFILES,
   countEnumeratedChecks,
   detectBlockingPrompt,
@@ -10,10 +11,12 @@ import {
   evaluateHeartbeat,
   extractVerdict,
   formatLedgerRow,
+  formatOutcome,
   isPassKind,
   looksLikeVerification,
   resolvePassKind,
   shapeVerificationPrompt,
+  type RunLedger,
 } from "./contract.ts";
 
 const MINUTE = 60_000;
@@ -129,15 +132,80 @@ describe("contract enforcement", () => {
     expect(decision.violations.map((v) => v.code)).toContain("unscoped_verification");
   });
 
-  test("--allow-unscoped is the explicit way past the scope rule", () => {
-    const decision = evaluateContract({
-      prompt: "Review the whole tree",
-      scopeText: null,
-      passKind: null,
-      allowUnscoped: true,
+  describe("--allow-unscoped is ratcheted", () => {
+    // The flag means "the scope is not a diff", never "there is no scope". Before the
+    // ratchet, `--allow-unscoped` on a one-line prompt with an inferred pass was honoured,
+    // which made it a generic way around the scope rule rather than a narrow exception.
+    const wholePlan =
+      "This plan survives contact with production: " +
+      "step one migrates the outbound queue behind a feature flag; step two backfills the " +
+      "existing rows in batches of 500 with a resumable cursor; step three flips the flag " +
+      "and retires the old path once the backlog is drained and the error rate holds.";
+
+    test("refuses a bypass on an inferred pass", () => {
+      const decision = evaluateContract({
+        prompt: `Review this: ${wholePlan}`,
+        scopeText: null,
+        passKind: null,
+        allowUnscoped: true,
+      });
+
+      expect(decision.ok).toBe(false);
+      expect(decision.violations.map((v) => v.code)).toContain("unratcheted_bypass");
+      expect(decision.violations[0].message).toContain("inferred rather than named");
     });
 
-    expect(decision.ok).toBe(true);
+    test("refuses a bypass with no real subject supplied inline", () => {
+      const decision = evaluateContract({
+        prompt: "Review the whole tree",
+        scopeText: null,
+        passKind: "review",
+        allowUnscoped: true,
+      });
+
+      expect(decision.ok).toBe(false);
+      expect(decision.violations.map((v) => v.code)).toContain("unratcheted_bypass");
+      expect(decision.violations[0].message).toContain("characters");
+    });
+
+    test("honours the documented P3 stress-test, which is the one legitimate use", () => {
+      // SKILL.md teaches exactly this shape: an adversarial pass over a plan supplied
+      // inline. Breaking it would break the documented three-phase planning pipeline.
+      const decision = evaluateContract({
+        prompt: wholePlan,
+        scopeText: null,
+        passKind: "adversarial",
+        allowUnscoped: true,
+      });
+
+      expect(decision.ok).toBe(true);
+      expect(decision.bypass).toBe("unscoped");
+    });
+
+    test("records nothing when the bypass did no work", () => {
+      // --allow-unscoped alongside a piped diff bypasses nothing, so it is not a bypass.
+      const decision = evaluateContract({
+        prompt: "one property",
+        scopeText: "diff --git a/x b/x",
+        passKind: "review",
+        allowUnscoped: true,
+      });
+
+      expect(decision.ok).toBe(true);
+      expect(decision.bypass).toBeNull();
+    });
+
+    test("does not apply to a plan pass, which never required scope", () => {
+      const decision = evaluateContract({
+        prompt: "Design a cache",
+        scopeText: null,
+        passKind: "plan",
+        allowUnscoped: true,
+      });
+
+      expect(decision.ok).toBe(true);
+      expect(decision.bypass).toBeNull();
+    });
   });
 
   test("a plan pass needs no scope, because planning converged", () => {
@@ -461,20 +529,37 @@ describe("telling blocked apart from not converging", () => {
 });
 
 describe("run ledger formatting", () => {
-  test("renders a non-converging run as NONE rather than blank", () => {
-    const row = formatLedgerRow({
+  function ledgerFixture(overrides: Partial<RunLedger> = {}): RunLedger {
+    return {
       jobId: "abc123",
       passKind: "review",
       reasoning: "xhigh",
       model: "gpt-5.6-sol",
-      durationMs: 110 * MINUTE,
-      totalTokens: 412_000,
-      execCount: 115,
-      verdict: null,
-      verdictProduced: false,
-      scoped: false,
-      timedOut: true,
-    });
+      durationMs: 51_000,
+      tokensSpent: 31_000,
+      cumulativeInputTokens: null,
+      execCount: 4,
+      verdict: "BROKEN",
+      verdictProduced: true,
+      scoped: true,
+      bypass: null,
+      timedOut: false,
+      breachReason: null,
+      ...overrides,
+    };
+  }
+
+  test("renders a non-converging run as NONE rather than blank", () => {
+    const row = formatLedgerRow(
+      ledgerFixture({
+        durationMs: 110 * MINUTE,
+        tokensSpent: 412_000,
+        execCount: 115,
+        verdict: null,
+        verdictProduced: false,
+        scoped: false,
+      })
+    );
 
     expect(row).toContain("abc123");
     expect(row).toContain("review");
@@ -484,19 +569,7 @@ describe("run ledger formatting", () => {
   });
 
   test("renders the scoped run that worked", () => {
-    const row = formatLedgerRow({
-      jobId: "def456",
-      passKind: "adversarial",
-      reasoning: "xhigh",
-      model: "gpt-5.6-sol",
-      durationMs: 51_000,
-      totalTokens: 31_000,
-      execCount: 4,
-      verdict: "BROKEN",
-      verdictProduced: true,
-      scoped: true,
-      timedOut: false,
-    });
+    const row = formatLedgerRow(ledgerFixture({ jobId: "def456", passKind: "adversarial" }));
 
     expect(row).toContain("51s");
     expect(row).toContain("BROKEN");
@@ -504,21 +577,63 @@ describe("run ledger formatting", () => {
   });
 
   test("tolerates missing metrics", () => {
-    const row = formatLedgerRow({
-      jobId: "ghi789",
-      passKind: null,
-      reasoning: "xhigh",
-      model: "gpt-5.6-sol",
-      durationMs: null,
-      totalTokens: null,
-      execCount: null,
-      verdict: null,
-      verdictProduced: false,
-      scoped: false,
-      timedOut: false,
-    });
+    const row = formatLedgerRow(
+      ledgerFixture({
+        jobId: "ghi789",
+        passKind: null,
+        durationMs: null,
+        tokensSpent: null,
+        execCount: null,
+        verdict: null,
+        verdictProduced: false,
+        scoped: false,
+      })
+    );
 
     expect(row).toContain("ghi789");
     expect(row).toContain("-");
+  });
+
+  test("shows spend and cumulative input as separate columns", () => {
+    // The whole point of the split: these are different quantities and a reader must be
+    // able to tell which one is missing.
+    const row = formatLedgerRow(ledgerFixture({ tokensSpent: 253_275, cumulativeInputTokens: 1_109_604 }));
+    expect(row).toContain("253,275");
+    expect(row).toContain("1,109,604");
+    expect(LEDGER_HEADER).toContain("SPENT");
+    expect(LEDGER_HEADER).toContain("CUM-IN");
+  });
+
+  test("never substitutes cumulative input for unmeasured spend", () => {
+    // Regression on the defect this PR exists to fix. A run whose spend was never
+    // reported must read "-" under SPENT, not borrow the cumulative-input number.
+    const row = formatLedgerRow(ledgerFixture({ tokensSpent: null, cumulativeInputTokens: 2_813_071 }));
+    expect(row).toContain("2,813,071");
+    expect(row).not.toContain("2,813,071  2,813,071");
+    const spentColumn = row.slice(0, row.indexOf("2,813,071"));
+    expect(spentColumn).toContain("-");
+  });
+
+  describe("outcome", () => {
+    test("prefers the verdict", () => {
+      expect(formatOutcome(ledgerFixture({ verdict: "CLEAN" }))).toBe("CLEAN");
+    });
+
+    test("names the guard that stopped a killed run", () => {
+      expect(
+        formatOutcome(ledgerFixture({ verdict: null, verdictProduced: false, breachReason: "stalled" }))
+      ).toBe("killed:stalled");
+    });
+
+    test("reads a legacy timed-out job as a wall-clock breach", () => {
+      // Jobs recorded before guards.ts existed only have `timedOut`.
+      expect(
+        formatOutcome(ledgerFixture({ verdict: null, verdictProduced: false, timedOut: true }))
+      ).toBe("killed:wall_clock");
+    });
+
+    test("falls back to NONE", () => {
+      expect(formatOutcome(ledgerFixture({ verdict: null, verdictProduced: false }))).toBe("NONE");
+    });
   });
 });

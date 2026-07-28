@@ -37,6 +37,13 @@ export const config = {
   // Per-pass overrides live in contract.ts PASS_PROFILES.
   defaultRunTimeoutMinutes: 30,
 
+  // Minutes with NO progress on any signal — log bytes, token spend, completed turns —
+  // before the runaway backstop stops a run. See guards.ts: this is a hang detector, not
+  // a cost control, and it is deliberately multi-condition. There is no token ceiling,
+  // because the measured evidence does not support one: the plan run judged excellent
+  // reported 13.7M tokens and the one judged a catastrophe reported 2.8M.
+  runawayStallMinutes: 10,
+
   // Default number of jobs to show in listings
   jobsListLimit: 20,
 

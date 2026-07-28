@@ -13,6 +13,7 @@ import {
   refreshJobStatus,
   cleanupOldJobs,
   deleteJob,
+  enforceRunGuards,
   sendToJob,
   getJobOutput,
   getJobFullOutput,
@@ -21,7 +22,10 @@ import {
   getJobsJson,
   getStatusJson,
   buildCompactJobJson,
+  buildRunReport,
 } from "./jobs.ts";
+import { hasStoredAnswer } from "./answer-store.ts";
+import { formatRunReport } from "./report.ts";
 import type { CompactJobJson, Job } from "./jobs.ts";
 import { getRunLedger, getRunLedgers } from "./jobs.ts";
 import { isTmuxAvailable, listSessions } from "./tmux.ts";
@@ -31,16 +35,19 @@ import {
   DEFAULT_HEARTBEAT_EXECS,
   DEFAULT_HEARTBEAT_MINUTES,
   LEDGER_HEADER,
+  MIN_INLINE_SUBJECT_CHARS,
   PASS_KINDS,
   PASS_PROFILES,
-  detectBlockingPrompt,
   evaluateContract,
   evaluateHeartbeat,
+  formatElapsed,
   formatLedgerRow,
+  formatOutcome,
   formatViolations,
   isPassKind,
   resolvePassKind,
   shapeVerificationPrompt,
+  type BypassKind,
   type PassKind,
 } from "./contract.ts";
 
@@ -53,7 +60,8 @@ Usage:
   codex-agent await-turn <jobId>         Wait for agent to finish current turn
   codex-agent send <jobId> "message"     Send message to running agent
   codex-agent capture <jobId> [lines]    Capture recent output (default: 50 lines)
-  codex-agent output <jobId>             Get full session output
+  codex-agent output <jobId>             Get the raw session transcript
+  codex-agent report <jobId>             What was asked, what came back, and the verdict
   codex-agent attach <jobId>             Get tmux attach command
   codex-agent watch <jobId>              Stream output updates
   codex-agent jobs [--json]              List all jobs
@@ -79,14 +87,33 @@ Invocation contract:
     git diff origin/main...HEAD -- src/a.ts |
       codex-agent start --pass review --property "postMessage cannot double-post"
 
-  A review/verify/audit prompt with nothing on stdin is REFUSED. Override per call
-  with --allow-unscoped when the scope really is the whole tree.
+  A review/verify/audit prompt with nothing on stdin is REFUSED. --allow-unscoped is the
+  narrow exception: it needs an explicit --pass and the subject supplied inline (a plan,
+  a spec — at least ${MIN_INLINE_SUBJECT_CHARS} characters), and every honoured bypass
+  is recorded in the ledger.
+
+Bounds, on every path:
+  Every run carries a wall-clock bound and a runaway backstop, and they now apply whether
+  you used --wait or started the job in the background — the guards used to live inside
+  the --wait loop only. The backstop needs the log, the token count AND the turn count all
+  flat at once, so a working run is never stopped for being expensive.
+
+  There is deliberately NO token ceiling. Measured over 87 runs, the plan judged excellent
+  cost 13.7M tokens and the one judged a catastrophe cost 2.8M, so no ceiling separates
+  them. The ledger reports SPENT and CUM-IN as two columns because they are two different
+  quantities; either can read "-" when it was never measured.
+
+Reading a run:
+  codex-agent report <jobId>   — the answer, untruncated, from a persisted file rather
+                                 than a tmux pane, plus why the run was judged as it was.
+                                 Exits 4 when the run is not a usable result.
 
 Options:
       --pass <kind>          Pass profile: ${PASS_KINDS.join(", ")} (default: inferred)
       --property <claim>     The single falsifiable claim to attack (shapes the prompt)
       --timeout <minutes>    Wall-clock bound (default: per-pass profile)
-      --allow-unscoped       Permit a verification pass with nothing on stdin
+      --allow-unscoped       Permit a verification pass with nothing on stdin. Requires an
+                             explicit --pass and the subject inline; recorded in the ledger
       --max-checks <n>       Override the enumerated-check limit for this call
       --word-cap <n>         Override the answer word cap (0 disables)
       --no-contract          Disable contract enforcement entirely (escape hatch)
@@ -366,123 +393,91 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Ticks between running-cost lines. At a 1s poll this is one line every 30 seconds. */
+const COST_REPORT_TICKS = 30;
+
 /**
- * Wait for a job, bounded by wall clock and narrated when it stops converging.
+ * Wait for a job to conclude, narrating cost as it goes.
  *
- * The 2026-07-26 run had neither bound. It was never *inactive* — 115 exec calls over
- * 110 minutes — so an inactivity timeout would not have caught it either. What was
- * missing was a total-elapsed ceiling and any signal at all that it was making calls
- * without approaching an answer.
+ * This used to be where the entire contract lived — the wall-clock bound, the
+ * blocking-prompt kill, the verdict reap and the convergence heartbeat were all inline
+ * here, which meant they only ever ran under `--wait`. They now live in `guards.ts` and
+ * are applied by `enforceRunGuards` from both this path and `refreshJobStatus`, so this
+ * function is only the `--wait` ergonomics: reap when answered, and show the meter.
  */
-async function waitForJobCompletion(
-  jobId: string,
-  timeoutMinutes: number | null = null,
-  /**
-   * When true, the wait ends as soon as a verdict appears rather than when the Codex
-   * process exits. A Codex session stays `running` after the agent has answered — it
-   * only closes on /quit or inactivity — so waiting for exit made a verification pass
-   * that had already answered correctly still burn its whole wall-clock bound and get
-   * scored as a timeout.
-   */
-  expectVerdict = false,
-  pollIntervalMs = 1000
-): Promise<Job | null> {
-  const startedMs = Date.now();
-  const timeoutMs = timeoutMinutes ? timeoutMinutes * 60_000 : null;
+async function waitForJobCompletion(jobId: string, pollIntervalMs = 1000): Promise<Job | null> {
   let heartbeatsEmitted = 0;
   let ticks = 0;
 
   while (true) {
     const refreshed = refreshJobStatus(jobId);
     if (!refreshed || refreshed.status !== "running") {
+      // `refreshJobStatus` runs the guards too, so a breach may already have happened
+      // there. Surface it rather than returning silently.
+      if (refreshed?.breachMessage) console.error(`\ncontract: ${refreshed.breachMessage}`);
       return refreshed;
     }
 
-    const elapsedMs = Date.now() - startedMs;
     ticks += 1;
 
-    if (expectVerdict && ticks % 3 === 0) {
-      // Resolving the transcript walks the sessions tree, so do not do it every tick.
-      const verdict = getRunLedger(jobId)?.verdict ?? null;
-      if (verdict) {
-        const answered = loadJob(jobId);
-        if (answered) {
-          answered.verdict = verdict;
-          answered.turnState = "idle";
-          saveJob(answered);
-        }
-        console.error(`\ncontract: verdict reached (${verdict}) — closing session ${jobId}.`);
-        sendToJob(jobId, "/quit");
-        // Give Codex a moment to exit cleanly so the job records completion itself.
+    // `--wait` means "this must conclude", so this is the one path that closes a session
+    // the moment it has answered. A background run is left open for another turn.
+    const guarded = enforceRunGuards(jobId, { reapWhenAnswered: true });
+    if (guarded && guarded.decision.action !== "continue") {
+      console.error(`\ncontract: ${guarded.decision.message}`);
+
+      if (guarded.decision.action === "reap") {
+        // Codex records its own completion on exit; give it a moment to do so.
         for (let i = 0; i < 10; i += 1) {
           await sleep(500);
           const closing = refreshJobStatus(jobId);
           if (closing && closing.status !== "running") return closing;
         }
-        return loadJob(jobId);
       }
-    }
 
-    // Fail fast on a prompt that will never resolve on its own. Without this, the
-    // first live run of this contract spent its entire wall-clock bound sitting on a
-    // directory-trust prompt and then reported "no verdict", which points at the
-    // wrong problem entirely.
-    const blocking = detectBlockingPrompt(getJobOutput(jobId, 40));
-    if (blocking.blocked) {
-      console.error(`\ncontract: job ${jobId} is BLOCKED on an interactive prompt, not working.`);
-      console.error(`  ${blocking.hint}`);
-      console.error(`  Inspect with: codex-agent capture ${jobId} 40 --clean`);
-      killJob(jobId);
-      const stopped = loadJob(jobId);
-      if (stopped) {
-        stopped.blockerKind = blocking.kind;
-        if (!stopped.error) stopped.error = "Blocked on an interactive Codex prompt";
-        saveJob(stopped);
-      }
       return loadJob(jobId);
     }
 
-    if (timeoutMs !== null && elapsedMs >= timeoutMs) {
+    const elapsedMs = elapsedSinceStart(guarded?.job ?? refreshed);
+
+    // Visible running cost. Invisible spend with no meter is the same defect class as
+    // an invisible ceiling: by the time anyone knows the number, it has been paid.
+    if (ticks % COST_REPORT_TICKS === 0) {
+      const spent = guarded?.job.usage?.total ?? null;
+      console.error(
+        `contract: ${formatElapsed(elapsedMs)} elapsed · ` +
+          `${spent === null ? "spend not reported yet" : `${spent.toLocaleString()} tokens spent`}`
+      );
+    }
+
+    // Report non-convergence while it is still happening, rather than after. Resolving
+    // the exec count walks the Codex sessions tree, so it is throttled.
+    if (ticks % 3 === 0) {
       const ledger = getRunLedger(jobId);
-      console.error(
-        `\ncontract: wall-clock bound of ${timeoutMinutes}m reached — stopping job ${jobId}.`
-      );
-      console.error(
-        `  ${ledger?.execCount ?? "?"} exec calls, verdict: ${ledger?.verdict ?? "NONE"}.`
-      );
-      console.error(
-        "  This is the bound working, not a crash. Narrow the property, supply the diff,"
-      );
-      console.error("  or raise it with --timeout <minutes>.");
-      killJob(jobId);
-      const stopped = loadJob(jobId);
-      if (stopped) {
-        stopped.timedOut = true;
-        if (!stopped.error) stopped.error = `Timed out after ${timeoutMinutes}m without a verdict`;
-        saveJob(stopped);
+      const heartbeat = evaluateHeartbeat({
+        elapsedMs,
+        execCount: ledger?.execCount ?? 0,
+        verdict: ledger?.verdict ?? null,
+        // Back off after the first report so a long legitimate run is not spammed:
+        // 5m/40 execs, then 10m/80, then 15m/120...
+        afterMinutes: DEFAULT_HEARTBEAT_MINUTES * (heartbeatsEmitted + 1),
+        afterExecs: DEFAULT_HEARTBEAT_EXECS * (heartbeatsEmitted + 1),
+      });
+
+      if (heartbeat.shouldReport) {
+        console.error(`contract: ${heartbeat.message}`);
+        heartbeatsEmitted += 1;
       }
-      return loadJob(jobId);
-    }
-
-    // Report non-convergence while it is still happening, rather than after.
-    const ledger = getRunLedger(jobId);
-    const heartbeat = evaluateHeartbeat({
-      elapsedMs,
-      execCount: ledger?.execCount ?? 0,
-      verdict: ledger?.verdict ?? null,
-      // Back off after the first report so a long legitimate run is not spammed:
-      // 5m/40 execs, then 10m/80, then 15m/120...
-      afterMinutes: DEFAULT_HEARTBEAT_MINUTES * (heartbeatsEmitted + 1),
-      afterExecs: DEFAULT_HEARTBEAT_EXECS * (heartbeatsEmitted + 1),
-    });
-
-    if (heartbeat.shouldReport) {
-      console.error(`contract: ${heartbeat.message}`);
-      heartbeatsEmitted += 1;
     }
 
     await sleep(pollIntervalMs);
   }
+}
+
+function elapsedSinceStart(job: Job): number {
+  const startMs = Date.parse(job.startedAt ?? job.createdAt);
+  if (!Number.isFinite(startMs)) return 0;
+  return Math.max(0, Date.now() - startMs);
 }
 
 async function notifyOnCompletion(
@@ -568,6 +563,8 @@ interface PreparedLaunch {
   sandbox: SandboxMode;
   timeoutMinutes: number;
   scoped: boolean;
+  /** Which contract control this run switched off, recorded so it shows up in the ledger. */
+  bypass: BypassKind | null;
 }
 
 /**
@@ -581,6 +578,10 @@ async function prepareLaunch(taskPrompt: string, options: Options): Promise<Prep
   const scopeText = await readStdinScope();
   const passKind = resolvePassKind(taskPrompt, options.passKind);
   const profile = PASS_PROFILES[passKind];
+
+  // Turning the contract off entirely is itself a bypass, and is recorded as one. An
+  // invisible escape hatch is indistinguishable from having no contract.
+  let bypass: BypassKind | null = options.contractEnabled ? null : "no-contract";
 
   if (options.contractEnabled) {
     const decision = evaluateContract({
@@ -597,6 +598,19 @@ async function prepareLaunch(taskPrompt: string, options: Options): Promise<Prep
       // Callers (and Claude) can branch on 3 to mean "fix the invocation, then retry".
       process.exit(3);
     }
+
+    bypass = decision.bypass;
+    if (bypass) {
+      console.error(
+        `contract: running unscoped by explicit request. Recorded as a bypass — it will show ` +
+          `in \`codex-agent ledger\`.`
+      );
+    }
+  } else {
+    console.error(
+      "contract: --no-contract given; every guard in contract.ts is off for this run. " +
+        "Recorded as a bypass."
+    );
   }
 
   // Effort tiering per pass, not one global dial. An explicit -r always wins so the
@@ -640,6 +654,7 @@ async function prepareLaunch(taskPrompt: string, options: Options): Promise<Prep
     sandbox,
     timeoutMinutes,
     scoped: Boolean(scopeText),
+    bypass,
   };
 }
 
@@ -896,6 +911,7 @@ async function launchJob(taskPrompt: string, options: Options): Promise<void> {
     console.log("");
     console.log(`Pass: ${launch.passKind} (${PASS_PROFILES[launch.passKind].description})`);
     console.log(`Scoped by stdin: ${launch.scoped ? "yes" : "no"}`);
+    console.log(`Bypass: ${launch.bypass ?? "none"}`);
     console.log(`Wall-clock bound: ${launch.timeoutMinutes}m`);
     process.exit(0);
   }
@@ -917,11 +933,15 @@ async function launchJob(taskPrompt: string, options: Options): Promise<void> {
     passKind: launch.passKind,
     scoped: launch.scoped,
     timeoutMinutes: launch.timeoutMinutes,
+    bypass: launch.bypass,
   });
 
   console.log(`Job started: ${job.id}`);
   console.log(`Model: ${job.model} (${job.reasoningEffort})`);
-  console.log(`Pass: ${launch.passKind}  Sandbox: ${launch.sandbox}  Scoped: ${launch.scoped ? "yes" : "no"}  Bound: ${launch.timeoutMinutes}m`);
+  console.log(
+    `Pass: ${launch.passKind}  Sandbox: ${launch.sandbox}  Scoped: ${launch.scoped ? "yes" : "no"}` +
+      `  Bound: ${launch.timeoutMinutes}m${launch.bypass ? `  Bypass: ${launch.bypass}` : ""}`
+  );
   console.log(`Working dir: ${job.cwd}`);
   console.log(`tmux session: ${job.tmuxSession}`);
   console.log("");
@@ -932,11 +952,9 @@ async function launchJob(taskPrompt: string, options: Options): Promise<void> {
 
   if (!options.waitForCompletion) return;
 
-  const completed = await waitForJobCompletion(
-    job.id,
-    launch.timeoutMinutes,
-    PASS_PROFILES[launch.passKind].requiresVerdict,
-  );
+  // The bound is carried on the job itself now, so both this path and any later
+  // observation of the job apply the same number.
+  const completed = await waitForJobCompletion(job.id);
   if (!completed) {
     console.error("Job disappeared while waiting");
     process.exit(1);
@@ -1114,6 +1132,40 @@ async function main() {
         break;
       }
 
+      case "report": {
+        if (positional.length === 0) {
+          console.error("Error: No job ID provided");
+          process.exit(1);
+        }
+
+        const report = buildRunReport(positional[0]);
+        if (!report) {
+          console.error(`Job ${positional[0]} not found`);
+          process.exit(1);
+        }
+
+        if (options.json) {
+          console.log(
+            JSON.stringify(
+              {
+                schema_version: "codex-agent.report.v1",
+                generated_at: new Date().toISOString(),
+                report,
+              },
+              null,
+              2
+            )
+          );
+        } else {
+          console.log(formatRunReport(report));
+        }
+
+        // A failed run must not look like a success to a caller checking exit status,
+        // whichever way it failed.
+        if (report.judgement.failed) process.exit(4);
+        break;
+      }
+
       case "output": {
         if (positional.length === 0) {
           console.error("Error: No job ID provided");
@@ -1122,6 +1174,15 @@ async function main() {
 
         let output = getJobFullOutput(positional[0]);
         if (output) {
+          // The complaint this answers: a caller ran `output --clean`, got raw TUI
+          // scrollback, and had to go hunting for the verdict in the job summary. The
+          // transcript is still available here, but say where the answer actually is.
+          if (hasStoredAnswer(positional[0])) {
+            console.error(
+              `note: this is the raw session transcript. For the agent's answer, the ledger and ` +
+                `why the run was judged as it was, use: codex-agent report ${positional[0]}`
+            );
+          }
           if (options.stripAnsi) {
             output = cleanTerminalOutput(output);
           }
@@ -1271,7 +1332,14 @@ async function main() {
         if (options.json) {
           console.log(
             JSON.stringify(
-              { schema_version: "codex-agent.ledger.v1", generated_at: new Date().toISOString(), runs: ledgers },
+              {
+                // v2: `totalTokens` is gone. It carried either true spend or cumulative
+                // input depending on which happened to be available, so it is replaced by
+                // the two distinct fields `tokensSpent` and `cumulativeInputTokens`.
+                schema_version: "codex-agent.ledger.v2",
+                generated_at: new Date().toISOString(),
+                runs: ledgers,
+              },
               null,
               2
             )

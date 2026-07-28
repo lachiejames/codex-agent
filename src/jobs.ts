@@ -20,7 +20,24 @@ import {
   parseSessionFile,
   type ParsedSessionData,
 } from "./session-parser.ts";
-import { extractVerdict, type PassKind, type RunLedger } from "./contract.ts";
+import {
+  PASS_PROFILES,
+  detectBlockingPrompt,
+  extractVerdict,
+  type BreachReason,
+  type BypassKind,
+  type PassKind,
+  type RunLedger,
+} from "./contract.ts";
+import { readAnswers } from "./answer-store.ts";
+import { judgeRun, type RunReport } from "./report.ts";
+import {
+  advanceProgress,
+  evaluateGuards,
+  stalledForMs,
+  type GuardDecision,
+  type ProgressState,
+} from "./guards.ts";
 import {
   createSession,
   cleanupCompletedSessions,
@@ -83,6 +100,20 @@ export interface Job {
   timedOut?: boolean;
   /** Parsed VERDICT: line, or null when the run never concluded. */
   verdict?: string | null;
+  /** Which contract control the caller switched off, recorded so a bypass is auditable. */
+  bypass?: BypassKind | null;
+  /** Which guard stopped this run, if one did. See guards.ts. */
+  breachReason?: BreachReason | null;
+  /** Operator-facing explanation of the breach, kept for `codex-agent report`. */
+  breachMessage?: string | null;
+  breachAt?: string;
+  /**
+   * Progress bookkeeping for the runaway backstop.
+   *
+   * Persisted rather than held in memory because the guards now run on the background
+   * path too, where each observation happens in a different short-lived CLI process.
+   */
+  progress?: ProgressState;
 }
 
 interface JobIndexEntry {
@@ -767,6 +798,7 @@ export interface StartJobOptions {
   passKind?: PassKind | null;
   scoped?: boolean;
   timeoutMinutes?: number;
+  bypass?: BypassKind | null;
 }
 
 /**
@@ -799,12 +831,222 @@ export function getRunLedger(jobId: string): RunLedger | null {
     reasoning: effective.reasoningEffort,
     model: effective.model,
     durationMs: computeElapsedMs(effective),
-    totalTokens: effective.usage?.total ?? sessionData?.tokens?.input ?? null,
+    // Two separate quantities, never substituted for one another. `usage.total` is what
+    // Codex said it spent; the session file's input count is cumulative input only. The
+    // old `usage?.total ?? sessionData?.tokens?.input` fallback meant this one field
+    // carried whichever happened to be available, so 42 of 87 recorded runs reported
+    // spend and 37 reported cumulative input — under the same column heading.
+    tokensSpent: effective.usage?.total ?? null,
+    cumulativeInputTokens: sessionData?.tokens?.input ?? null,
     execCount: sessionData?.exec_count ?? null,
     verdict,
     verdictProduced: verdict !== null,
     scoped: effective.scoped ?? false,
+    bypass: effective.bypass ?? null,
     timedOut: effective.timedOut ?? false,
+    breachReason: effective.breachReason ?? null,
+  };
+}
+
+/**
+ * One stat of the job's `.log`, for the runaway backstop's liveness evidence.
+ *
+ * Size, mtime and filesystem identity come from a single call so they always describe the
+ * same file at the same moment — sampling them separately would let a rename land between
+ * two of the three reads.
+ */
+function readLogStat(jobId: string): { bytes: number; mtimeMs: number; identity: string | null } {
+  const logFile = getJobArtifactPath(jobId, ".log");
+  if (!logFile) return { bytes: 0, mtimeMs: 0, identity: null };
+
+  try {
+    const stat = statSync(logFile);
+    return { bytes: stat.size, mtimeMs: stat.mtimeMs, identity: `${stat.dev}:${stat.ino}` };
+  } catch {
+    // Identity null means "no evidence", which the backstop treats very differently from
+    // "unchanged". See ProgressSample.logIdentity.
+    return { bytes: 0, mtimeMs: 0, identity: null };
+  }
+}
+
+/**
+ * Resolve a verdict without walking the Codex sessions tree.
+ *
+ * `getRunLedger` resolves verdicts by parsing session files, which is far too expensive
+ * to do on every observation. Now that the turn-complete hook persists the untruncated
+ * answer, the verdict is available from a single file read — and more reliably than
+ * before, since `lastAgentMessage` is capped at 500 characters and the verdict is
+ * deliberately the last line of the answer.
+ */
+function resolveVerdictCheaply(job: Job): string | null {
+  if (job.verdict) return job.verdict;
+
+  // Scan EVERY persisted turn, newest first — not just the latest.
+  //
+  // An adversarial pass found the bug: reading only the last answer meant a verdict
+  // reached on turn 1 became invisible once a turn 2 without one arrived, so a run that
+  // had concluded was left unanswered, ran to its bound, and was recorded as a wall-clock
+  // breach. A later turn does not retract an earlier verdict.
+  const answers = readAnswers(job.id);
+  for (let index = answers.length - 1; index >= 0; index -= 1) {
+    const verdict = extractVerdict(answers[index].text);
+    if (verdict) return verdict;
+  }
+
+  return extractVerdict(job.lastAgentMessage);
+}
+
+export interface GuardOutcome {
+  decision: GuardDecision;
+  job: Job;
+}
+
+/**
+ * Apply the run guards to a job, from whichever path is observing it.
+ *
+ * This is the fix for the contract holding on only one invocation shape. The wall-clock
+ * bound used to live inside cli.ts's wait loop, so it existed only under `--wait` —
+ * while the persisted orchestration pattern told callers to start jobs in the
+ * background. It is called here from `refreshJobStatus`, which every read path goes
+ * through (`status`, `jobs`, `await-turn`, `capture`), and separately from the wait loop
+ * with `reapWhenAnswered` set.
+ *
+ * Killing on a read mirrors what `refreshJobStatus` already did for the inactivity
+ * timeout, so a job is stopped by whoever next looks at it rather than never.
+ *
+ * @param options.reapWhenAnswered close the session as soon as it has answered. Only the
+ *   `--wait` path asks for this: a background job may be a conversation to continue, and
+ *   auto-closing those would break `await-turn`.
+ */
+export function enforceRunGuards(
+  jobId: string,
+  options: { reapWhenAnswered?: boolean; nowMs?: number } = {}
+): GuardOutcome | null {
+  const job = loadJob(jobId);
+  if (!job || job.status !== "running") return null;
+
+  const nowMs = options.nowMs ?? Date.now();
+  const withUsage = persistCodexUsageFromLog(job);
+
+  const logStat = readLogStat(jobId);
+  const progress = advanceProgress(withUsage.progress ?? null, {
+    observedAtMs: nowMs,
+    logBytes: logStat.bytes,
+    // A live writer moves mtime on every write even when the size happens to be unchanged.
+    logMtimeMs: logStat.mtimeMs,
+    logIdentity: logStat.identity,
+    // Spend only. Cumulative input is not a progress signal — it climbs with re-sent
+    // context on every turn whether or not the agent is doing anything.
+    tokensSpent: withUsage.usage?.total ?? null,
+    turnsCompleted: withUsage.turnsCompleted ?? withUsage.turnCount ?? 0,
+  });
+
+  const profile = withUsage.passKind ? PASS_PROFILES[withUsage.passKind] : null;
+  const blocking = detectBlockingPrompt(getJobOutput(jobId, 40));
+  // Resolved once and persisted below, so a verdict found in the answer file is not
+  // rediscovered from scratch on every observation — and cannot be lost by a later turn.
+  const resolvedVerdict = resolveVerdictCheaply(withUsage);
+  const decision = evaluateGuards({
+    jobId,
+    passKind: withUsage.passKind ?? null,
+    elapsedMs: computeElapsedMs(withUsage),
+    timeoutMinutes: withUsage.timeoutMinutes ?? null,
+    stalledForMs: stalledForMs(progress, nowMs),
+    verdict: resolvedVerdict,
+    requiresVerdict: profile?.requiresVerdict ?? false,
+    idleAfterTurn: signalFileExists(jobId) || withUsage.turnState === "idle",
+    blockingPrompt:
+      blocking.blocked && blocking.kind ? { kind: blocking.kind, hint: blocking.hint } : null,
+    reapWhenAnswered: options.reapWhenAnswered ?? false,
+  });
+
+  // Persist the progress window on every observation, or the stall clock would restart
+  // each time a short-lived CLI process looked at the job. A verdict found in the answer
+  // file is promoted onto the job at the same time, so it is durable from the moment it is
+  // first seen rather than only when the run is reaped.
+  const updated: Job = {
+    ...withUsage,
+    progress,
+    verdict: resolvedVerdict ?? withUsage.verdict ?? null,
+  };
+
+  if (decision.action === "kill") {
+    if (updated.tmuxSession) killSession(updated.tmuxSession);
+    clearSignalFile(jobId);
+    updated.status = "failed";
+    updated.breachReason = decision.reason;
+    updated.breachMessage = decision.message;
+    updated.breachAt = new Date(nowMs).toISOString();
+    if (decision.reason === "wall_clock") updated.timedOut = true;
+    if (decision.reason === "blocked" && blocking.kind) updated.blockerKind = blocking.kind;
+    if (!updated.error) updated.error = decision.message;
+    updated.completedAt = new Date(nowMs).toISOString();
+    saveJob(updated);
+    return { decision, job: loadJob(jobId) ?? updated };
+  }
+
+  if (decision.action === "reap") {
+    updated.turnState = "idle";
+    saveJob(updated);
+    // Ask Codex to exit cleanly so its own completion hook records the outcome. The
+    // caller waits for that; it is not forced here.
+    if (updated.tmuxSession) sendMessage(updated.tmuxSession, "/quit");
+    return { decision, job: loadJob(jobId) ?? updated };
+  }
+
+  saveJob(updated);
+  return { decision, job: loadJob(jobId) ?? updated };
+}
+
+/**
+ * Assemble the diagnosable artifact for a run: what was asked, what came back, and why
+ * it was judged the way it was.
+ *
+ * Reads persisted files only — never a tmux pane — so it works identically for a run that
+ * finished an hour ago, one that was killed at its bound, and one whose tmux server has
+ * since died.
+ */
+export function buildRunReport(jobId: string): RunReport | null {
+  const job = loadJob(jobId);
+  if (!job) return null;
+
+  const stored = readAnswers(jobId);
+  // Jobs recorded before durable capture existed have only the 500-character preview the
+  // turn hook kept. Show it rather than reporting "nothing persisted" at a run that did
+  // in fact answer — but never present it as the whole answer.
+  const answers =
+    stored.length > 0
+      ? stored
+      : job.lastAgentMessage
+        ? [
+            {
+              turnId: "-",
+              timestamp: job.lastTurnCompletedAt ?? job.completedAt ?? "",
+              text: job.lastAgentMessage,
+            },
+          ]
+        : [];
+  const ledger = getRunLedger(jobId);
+  const profile = job.passKind ? PASS_PROFILES[job.passKind] : null;
+
+  return {
+    jobId: job.id,
+    passKind: job.passKind ?? null,
+    status: job.status,
+    asked: job.prompt ?? "",
+    answers,
+    answersTruncated: stored.length === 0 && answers.length > 0,
+    ledger,
+    judgement: judgeRun({
+      passKind: job.passKind ?? null,
+      requiresVerdict: profile?.requiresVerdict ?? false,
+      status: job.status,
+      verdict: ledger?.verdict ?? job.verdict ?? null,
+      breachReason: job.breachReason ?? (job.timedOut ? "wall_clock" : null),
+      hasAnswer: answers.length > 0,
+    }),
+    breachMessage: job.breachMessage ?? null,
+    promptPath: getJobArtifactPath(jobId, ".prompt"),
   };
 }
 
@@ -837,6 +1079,7 @@ export function startJob(options: StartJobOptions): Job {
     passKind: options.passKind ?? null,
     scoped: options.scoped ?? false,
     timeoutMinutes: options.timeoutMinutes,
+    bypass: options.bypass ?? null,
   };
 
   // Record the session name BEFORE creating it so orphan cleanup
@@ -1150,6 +1393,15 @@ export function refreshJobStatus(jobId: string): Job | null {
         job.error = `Timed out after ${config.defaultTimeout} minutes of inactivity`;
         job.completedAt = new Date().toISOString();
         saveJob(persistCodexUsageFromLog(job));
+      } else {
+        // Apply the wall-clock and runaway guards here, not only in the `--wait` loop.
+        // A job started in the background used to have no ceiling at all beyond the
+        // inactivity check above, which the 2026-07-26 failure sailed straight past
+        // because it was never inactive.
+        const guarded = enforceRunGuards(jobId);
+        if (guarded && guarded.decision.action !== "continue") {
+          return guarded.job;
+        }
       }
     }
   }
