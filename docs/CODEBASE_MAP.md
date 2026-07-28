@@ -23,6 +23,14 @@ graph TB
         TMUX[tmux.ts]
         CONFIG[config.ts]
     end
+    subgraph Contract
+        CONTRACT[contract.ts]
+        GUARDS[guards.ts]
+    end
+    subgraph Results
+        ANSWERS[answer-store.ts]
+        REPORT[report.ts]
+    end
     subgraph Utils
         FILES[files.ts]
     end
@@ -38,13 +46,26 @@ graph TB
     CLI_TS --> JOBS
     CLI_TS --> FILES
     CLI_TS --> CONFIG
+    CLI_TS --> CONTRACT
+    CLI_TS --> REPORT
     JOBS --> TMUX
     JOBS --> CONFIG
+    JOBS --> GUARDS
+    JOBS --> ANSWERS
+    JOBS --> REPORT
+    GUARDS --> CONTRACT
+    REPORT --> CONTRACT
+    ANSWERS --> JOBS_DIR
     TMUX --> CONFIG
     TMUX --> TMUX_BIN
     TMUX --> CODEX
     JOBS --> JOBS_DIR
 ```
+
+> **Partially stale.** The token counts and file list below were generated before
+> `contract.ts`, `state.ts`, `session-parser.ts`, `prompt-context.ts`, `output-cleaner.ts`,
+> `usage-parser.ts` and `watcher.ts` existed, and have not been regenerated. The graph above
+> and the "Invocation contract and guards" section are current.
 
 ## Directory Structure
 
@@ -63,6 +84,32 @@ codex-agent/
 ├── .gitignore
 └── package.json
 ```
+
+## Invocation contract and guards
+
+Two halves of one argument. The contract decides whether a call may **start**; the guards
+decide whether a running call may **continue**.
+
+| Module | Owns |
+|--------|------|
+| `src/contract.ts` | Pass profiles, the scope rule (exit 3), the breadth guard, the `--allow-unscoped` ratchet, verdict extraction, prompt shaping, the run ledger |
+| `src/guards.ts` | Wall clock, the runaway backstop, the blocked-prompt kill, and reap-when-answered. Pure functions; no clock, no tmux, no Codex |
+| `src/answer-store.ts` | `<jobId>.answer.md` — the untruncated answer, written by the notify hook when a turn completes |
+| `src/report.ts` | `codex-agent report`: what was asked, what came back, and why it was judged so |
+
+`jobs.ts:enforceRunGuards` is the seam. It samples a running job, folds the observation into
+the persisted `progress` state, calls `evaluateGuards`, and acts on the decision. It is
+called from `refreshJobStatus` — so `status`, `jobs`, `capture` and `await-turn` all enforce
+the bounds — and from the `--wait` loop with `reapWhenAnswered: true`.
+
+Three things are deliberately **not** guarded, each because the measured evidence refuses
+them. Read the header of `guards.ts` before adding any of them back:
+
+- **No token ceiling.** The plan run judged excellent cost 13.7M tokens; the one judged a
+  catastrophe cost 2.8M. No ceiling separates them.
+- **No zero-exec fail-fast.** `execCount: 0` is the healthy signature of a scoped pass.
+- **No single-metric stall rule.** The backstop needs the log, the token count and the turn
+  count all unchanged at once.
 
 ## Module Guide
 

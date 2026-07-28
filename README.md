@@ -131,43 +131,53 @@ still a second skill Claude has to choose between, and it needs machinery to sta
 ```bash
 bash scripts/verify-install.sh --all    # one tree, contract, read-only, skills, a real bounded run
 bash scripts/cleanup-legacy.sh          # dry run; --delete to apply
-codex-agent ledger                      # duration, tokens, execs, scoped, verdict per run
+codex-agent ledger                      # duration, SPENT, CUM-IN, execs, scoped, bypass, outcome
 codex-agent clean                       # reap job logs + orphaned tmux sessions
 ```
 
 The ledger is what makes non-convergence measurable rather than anecdotal. A healthy scoped review looks
-like _25s / ~22k tokens / 0 execs / BROKEN_. An unscoped one looks like _341k tokens / 22 execs / NONE_.
-Treat any `NONE` as a failed run, not a pass.
+like _25s / ~22k spent / 0 execs / BROKEN_ — note that **0 execs is health**, not spinning: the shaped
+prompt tells the agent not to read other files. Treat any `NONE` on a verification pass as a failed run.
+
+`SPENT` and `CUM-IN` are two different quantities. `SPENT` is what Codex reported spending; `CUM-IN` is
+cumulative *input* tokens from the session file, which excludes output and re-counts context every turn.
+Either can read `-` when it was not measured. They were one column until they were caught reporting the
+same run as 253k and 1.1M, so never substitute one for the other.
 
 ## Commands
 
 ```
 codex-agent start "prompt" [options]   Spawn an agent
+codex-agent report <jobId> [--json]    Asked / answered / judged — how to read a result
 codex-agent ledger [--json]            Run ledger
 codex-agent status <jobId> [--json]    Job status
 codex-agent await-turn <jobId>         Block until the agent finishes a turn
 codex-agent send <jobId> "message"     Steer a running agent
 codex-agent capture <jobId> [n]        Recent output (--clean strips TUI noise)
-codex-agent output <jobId>             Full transcript
+codex-agent output <jobId>             Raw transcript (debugging Codex, not reading answers)
 codex-agent jobs [--json] [--all]      List jobs
 codex-agent kill <jobId>               Stop a job
 codex-agent clean                      Reap old jobs + orphaned sessions
 codex-agent health                     Check tmux + codex
 ```
 
+`report` is the one to reach for. It prints the answer untruncated from a persisted file rather than from
+a tmux pane, so it survives the session — and the tmux server — going away, and it exits **4** when the
+run is not a usable result.
+
 | Flag               | Values                                          | Notes                                    |
 | ------------------ | ----------------------------------------------- | ---------------------------------------- |
 | `--pass`           | plan, review, mechanical, adversarial           | Sets effort, sandbox, bound, caps        |
 | `--property`       | string                                          | The single falsifiable claim to attack   |
 | `--timeout`        | minutes                                         | Wall-clock bound                         |
-| `--allow-unscoped` | flag                                            | Permit a verification pass with no stdin |
+| `--allow-unscoped` | flag                                            | No stdin, by exception: needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
 | `--max-checks`     | n                                               | Override the enumerated-check limit      |
 | `--word-cap`       | n                                               | Override the answer cap (0 disables)     |
-| `--no-contract`    | flag                                            | Disable enforcement (escape hatch)       |
+| `--no-contract`    | flag                                            | Disable enforcement; recorded as a bypass |
 | `-s`, `--sandbox`  | read-only, workspace-write, danger-full-access  | Default `read-only`                      |
 | `-r`, `--reasoning`| low, medium, high, xhigh                        | Overrides the profile                    |
 | `--map`            | flag                                            | Include `docs/CODEBASE_MAP.md`           |
-| `-w`, `--wait`     | flag                                            | Apply the bound; return on verdict       |
+| `-w`, `--wait`     | flag                                            | Return once answered and reap the session. Bounds apply with or without it |
 | `--dry-run`        | flag                                            | Show the shaped prompt without executing |
 
 There is no `-f`/`--file` flag — it was removed upstream. **stdin is the scope channel.**
@@ -175,10 +185,15 @@ There is no `-f`/`--file` flag — it was removed upstream. **stdin is the scope
 ## How it works
 
 Each job runs `codex` inside its own tmux session, wrapped in `script` so the full transcript is captured to
-`~/.codex-agent/jobs/<id>.log`. A per-job notify hook writes a signal file on turn completion. Job state
-lives in `<id>.json`; metrics are read back from the Codex session transcript under `~/.codex/sessions/`,
-located by working directory, time window, and prompt content — Codex 0.145.0 never prints a session id, so
-the id-based lookup upstream relied on always failed silently.
+`~/.codex-agent/jobs/<id>.log`. A per-job notify hook writes a signal file on turn completion **and persists
+the answer untruncated to `<id>.answer.md`** — a verdict that exists only in a live tmux session is not a
+verdict, and one has already been lost to a dead tmux server. Job state lives in `<id>.json`; metrics are
+read back from the Codex session transcript under `~/.codex/sessions/`, located by working directory, time
+window, and prompt content — Codex 0.145.0 never prints a session id, so the id-based lookup upstream relied
+on always failed silently.
+
+Bounds live in `src/guards.ts` and are applied by `enforceRunGuards`, which every command that observes a job
+runs. They are not tied to `--wait`; a job past its bound is stopped by whoever next looks at it.
 
 Architecture: [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 

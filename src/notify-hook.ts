@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { updateJobTurn, writeSignalFile, type TurnEvent } from "./watcher.ts";
+import { appendAnswer } from "./answer-store.ts";
 
 type NotifyPayload = {
   type?: string;
@@ -36,6 +37,19 @@ function main(): void {
     lastAgentMessage: toStringOrNull(payload["last-assistant-message"]),
     timestamp: new Date().toISOString(),
   };
+
+  // Persist the answer untruncated BEFORE touching the job record. This is the only
+  // moment the full text is available in-process — `updateJobTurn` keeps a 500-character
+  // preview for listings, and the terminal is a lossy TUI. If this write is skipped the
+  // answer only exists in a live tmux session, which is how a whole planning pass was
+  // lost when the tmux server died.
+  if (event.lastAgentMessage) {
+    appendAnswer(jobId, {
+      turnId: event.turnId,
+      timestamp: event.timestamp,
+      text: event.lastAgentMessage,
+    });
+  }
 
   writeSignalFile(jobId, event);
   updateJobTurn(jobId, event);

@@ -82,14 +82,33 @@ describe("CLI invocation contract", () => {
     expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
   });
 
-  test("--allow-unscoped is the explicit opt-out", () => {
+  test("--allow-unscoped no longer waves through a one-line prompt", () => {
+    // Ratcheted: the bypass used to be honoured here, which made it a general way past
+    // the scope rule instead of a narrow exception.
     const result = runCli(
       ["start", "Review the whole tree", "--dry-run", "--allow-unscoped"],
       null,
     );
 
+    expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
+    expect(result.stderr).toContain("not honoured here");
+  });
+
+  test("--allow-unscoped is honoured for the documented P3 shape, and recorded", () => {
+    const plan =
+      "This plan survives contact with production: migrate the outbound queue behind a " +
+      "feature flag, backfill existing rows in batches of 500 with a resumable cursor, then " +
+      "flip the flag and retire the old path once the backlog drains and error rate holds.";
+
+    const result = runCli(
+      ["start", "--pass", "adversarial", "--property", plan, "--dry-run", "--allow-unscoped"],
+      null,
+    );
+
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Scoped by stdin: no");
+    // A bypass that is not visible afterwards is indistinguishable from no contract.
+    expect(result.stderr).toContain("Recorded as a bypass");
   });
 
   test("refuses the enumerated-checklist shape that ran 1h50m", () => {
@@ -279,8 +298,22 @@ describe("CLI invocation contract", () => {
     const payload = JSON.parse(result.stdout);
 
     expect(result.exitCode).toBe(0);
-    expect(payload.schema_version).toBe("codex-agent.ledger.v1");
+    // v2 because `totalTokens` was replaced. It used to carry either true spend or
+    // cumulative input depending on which was available, so consumers reading it as a cost
+    // were sometimes wrong by 4x — a silent change would have left them wrong quietly.
+    expect(payload.schema_version).toBe("codex-agent.ledger.v2");
     expect(Array.isArray(payload.runs)).toBe(true);
+  });
+
+  test("the ledger reports spend and cumulative input as distinct fields", () => {
+    const result = runCli(["ledger", "--json", "--limit", "5"], null);
+    const payload = JSON.parse(result.stdout);
+
+    for (const run of payload.runs) {
+      expect(run).not.toHaveProperty("totalTokens");
+      expect(run).toHaveProperty("tokensSpent");
+      expect(run).toHaveProperty("cumulativeInputTokens");
+    }
   });
 
   test("help documents the contract, so the failure mode is discoverable", () => {

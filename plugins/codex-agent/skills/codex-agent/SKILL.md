@@ -99,13 +99,30 @@ The CLI refuses violations rather than trusting you to remember:
 | exit | meaning | what to do |
 |---|---|---|
 | **3** | contract refusal | fix the invocation; do not work around it |
-| **4** | verification pass produced no verdict | narrow the property; do not raise the timeout first |
+| **4** | run is not a usable result (no verdict, or killed by a guard) | narrow the property; do not raise the timeout first |
 
 1. **Pipe the diff.** A review/verify/audit prompt with nothing on stdin is refused.
 2. **One property per call.** Past 3 enumerated checks a review is refused; fan out.
-3. **Every run has a wall-clock bound**, defaulted per pass.
+3. **Every run has a wall-clock bound**, defaulted per pass, applied on every path.
 4. **Answers are word-capped**, which forces a verdict instead of exploration.
 5. **A verdict is mandatory and machine-checked** — `VERDICT: CLEAN` or `VERDICT: BROKEN`.
+6. **Bypasses are narrow and recorded.** `--allow-unscoped` needs an explicit `--pass` and
+   the subject supplied inline (≥200 characters); `--no-contract` is logged too. Both show
+   in `codex-agent ledger` under `BYPASS`.
+
+### What is deliberately NOT enforced
+
+**There is no token ceiling, and adding one would be wrong.** Measured over 87 recorded
+runs: the plan pass judged excellent cost 13.7M tokens over 25 minutes with 83 exec calls;
+the plan pass judged a catastrophe cost 2.8M. The expensive run was the good one, so no
+ceiling separates them. Bound the *question*, not the spend.
+
+**There is no zero-exec fail-fast.** `execCount: 0` is the *healthy* signature for a scoped
+pass — the shaped prompt says "Do not read other files", so the golden 51-second review
+made zero exec calls and answered correctly. A guard on that would kill the best runs.
+
+The runaway backstop that does exist requires the log, the token count **and** the turn
+count to be flat simultaneously for 10 minutes. It is a hang detector, not a budget.
 
 ### Pass profiles
 
@@ -186,7 +203,9 @@ codex-agent start --pass adversarial --allow-unscoped \
 ```
 
 `--allow-unscoped` is correct here — the subject is a plan you are supplying inline, not
-a diff. This is the one legitimate use of that flag.
+a diff. This is the one legitimate use of that flag, and the CLI now enforces exactly that
+shape: an explicit `--pass` plus a real inline subject. Pasting the actual plan is what
+makes it pass; `--property "stress-test my plan"` is refused with exit 3.
 
 Then **you** write the plan up (`docs/prds/<name>.md` if the repo uses that), get the
 user's agreement, and **you** implement it.
@@ -293,9 +312,9 @@ Regenerate it when the architecture moves, not on every change.
 codex-agent start --pass plan "..." --map
 ```
 
-**2. Wait.** For anything that must conclude, prefer `--wait`: it applies the pass's
-wall-clock bound and, for verification passes, returns the moment a verdict appears
-rather than when the session closes.
+**2. Wait.** For anything that must conclude, prefer `--wait`. It returns the moment the
+pass has answered — a verdict for a verification pass, a completed turn for a plan — and
+it shows a running cost line while it waits.
 
 For a conversation you intend to continue, use `await-turn` in a background Bash task:
 
@@ -304,10 +323,32 @@ codex-agent await-turn "$JOB_ID"
 codex-agent status "$JOB_ID"
 ```
 
-`await-turn` has no wall-clock bound of its own. Do not read that as licence to wait
-forever — an unbounded `await-turn` on an unscoped review *is* the 1h50m run.
+**The bounds apply either way.** The wall-clock bound, the runaway backstop and the
+blocking-prompt kill live in `guards.ts` and are applied by every path that observes a
+job, including `status`, `jobs` and `await-turn`. They used to live inside the `--wait`
+loop, so a job started in the background had no ceiling at all — that gap is closed.
+
+What `--wait` still adds is *reaping*: it closes a session as soon as it has answered.
+A background job is deliberately left open so you can `send` it another turn, so close
+those yourself with `send <id> "/quit"` when you are done.
 
 **3. React.** Follow up with `send`, or close with `send <id> "/quit"`.
+
+**4. Read the result with `report`, not `output`.**
+
+```bash
+codex-agent report "$JOB_ID"
+```
+
+`report` prints what was asked, the agent's answer **untruncated**, the ledger row, and a
+judgement of whether the run is usable. It reads persisted files, so it still works after
+the tmux session — or the whole tmux server — has gone away. It exits **4** when the run
+is not a usable result.
+
+`output` is the raw session transcript and is for debugging Codex itself. Do not reach for
+it to find an answer: it returns terminal scrollback, and a caller who did that once
+concluded a perfectly good 18-minute plan was unrecoverable when it was sitting in the
+job record the whole time.
 
 ### Parallelism
 
@@ -371,31 +412,43 @@ almost never needed.
 
 ```bash
 codex-agent start "prompt" [options]   # spawn (see flags below)
-codex-agent ledger [--json]            # duration, tokens, execs, scoped, verdict
+codex-agent report <jobId> [--json]    # asked / answered / judged — read this one
+codex-agent ledger [--json]            # duration, SPENT, CUM-IN, execs, scoped, bypass, outcome
 codex-agent status <jobId> [--json]
 codex-agent await-turn <jobId> [--json]
 codex-agent send <jobId> "message"
 codex-agent capture <jobId> [lines] [--clean]
-codex-agent output <jobId> [--clean]
+codex-agent output <jobId> [--clean]   # raw transcript; for debugging Codex, not for answers
 codex-agent jobs [--json] [--all]
 codex-agent kill <jobId>
 codex-agent clean
 codex-agent health
 ```
 
+The ledger has **two** token columns and they are not interchangeable:
+
+| column | meaning |
+|---|---|
+| `SPENT` | what Codex reported spending. `-` means it never reported it. |
+| `CUM-IN` | cumulative *input* tokens from the session file — excludes output, counts re-sent context every turn. Not a cost. |
+
+They used to be one column fed by whichever was available, which is why the same run could
+appear to cost 253k or 1.1M. If you need a cost, read `SPENT` and treat `-` as unknown —
+never substitute `CUM-IN` for it.
+
 | Flag | Values | Description |
 |---|---|---|
 | `--pass` | plan, review, mechanical, adversarial | Pass profile: effort, sandbox, bound, caps |
 | `--property` | string | The single falsifiable claim to attack |
 | `--timeout` | minutes | Wall-clock bound (default: per pass) |
-| `--allow-unscoped` | flag | Permit a verification pass with no stdin |
+| `--allow-unscoped` | flag | Permit a verification pass with no stdin. Needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
 | `--max-checks` | n | Override the enumerated-check limit |
 | `--word-cap` | n | Override the answer cap (0 disables) |
-| `--no-contract` | flag | Disable enforcement (escape hatch) |
+| `--no-contract` | flag | Disable enforcement (escape hatch); recorded as a bypass |
 | `-s`, `--sandbox` | read-only, workspace-write, danger-full-access | Default `read-only` |
 | `-r`, `--reasoning` | low, medium, high, xhigh | Overrides the pass profile |
 | `--map` | flag | Include `docs/CODEBASE_MAP.md` |
-| `-w`, `--wait` | flag | Apply the bound; return on verdict |
+| `-w`, `--wait` | flag | Return once answered, and reap the session. Bounds apply with or without it |
 | `--dry-run` | flag | Show the shaped prompt without executing |
 
 There is no `-f`/`--file` flag — it was removed upstream. **stdin is the scope channel.**

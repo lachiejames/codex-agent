@@ -163,7 +163,22 @@ export function countEnumeratedChecks(prompt: string): number {
 // Contract evaluation
 // --------------------------------------------------------------------------
 
-export type ViolationCode = "unscoped_verification" | "excessive_breadth";
+export type ViolationCode =
+  | "unscoped_verification"
+  | "excessive_breadth"
+  | "unratcheted_bypass";
+
+/**
+ * Minimum inline subject length before `--allow-unscoped` is honoured.
+ *
+ * "Unscoped" was only ever meant to mean "the scope is not a diff on stdin" — not "there
+ * is no subject at all". The one documented legitimate use is the P3 stress-test in
+ * SKILL.md, which pastes an entire plan into `--property` and so runs to thousands of
+ * characters. A bypass reaching for the flag to dodge the scope rule looks like
+ * `--allow-unscoped --property "check the auth module"`, around 25. The floor separates
+ * those two by an order of magnitude without needing to guess intent.
+ */
+export const MIN_INLINE_SUBJECT_CHARS = 200;
 
 export interface ContractViolation {
   code: ViolationCode;
@@ -189,6 +204,13 @@ export interface ContractDecision {
   violations: ContractViolation[];
   /** True when the invocation may proceed. */
   ok: boolean;
+  /**
+   * Which control this invocation actually switched off, or null when it relied on none.
+   *
+   * Only set when the bypass was load-bearing: passing `--allow-unscoped` alongside a
+   * piped diff bypasses nothing and is not recorded as a bypass.
+   */
+  bypass: BypassKind | null;
 }
 
 /**
@@ -208,6 +230,55 @@ export function evaluateContract(input: ContractInput): ContractDecision {
   const violations: ContractViolation[] = [];
 
   const hasScope = Boolean(input.scopeText && input.scopeText.trim().length > 0);
+  // The bypass only does work when the scope rule would otherwise have refused this call.
+  const bypassIsLoadBearing = profile.requiresScope && !hasScope && Boolean(input.allowUnscoped);
+
+  // Rule 0 — ratchet the bypass.
+  //
+  // A generic escape hatch weakens more than the rule it opens, unless its semantics are
+  // narrow and its use is visible afterwards. Two conditions, both cheap:
+  //
+  //   * The pass must be named explicitly. Bypassing an *inferred* pass means neither the
+  //     caller nor the tool knows which lane was opened.
+  //   * The subject must actually be present in the invocation. "Unscoped" means the scope
+  //     is not a diff on stdin — it never meant there is no subject.
+  //
+  // This deliberately keeps SKILL.md's P3 stress-test working: `--pass adversarial` is
+  // explicit and the plan is pasted into --property, so both conditions hold.
+  if (bypassIsLoadBearing) {
+    const reasons: string[] = [];
+    if (input.passKind === null) {
+      reasons.push(
+        "the pass was inferred rather than named — add --pass " + passKind + " to say which lane you mean"
+      );
+    }
+    if (input.prompt.trim().length < MIN_INLINE_SUBJECT_CHARS) {
+      reasons.push(
+        `the subject is only ${input.prompt.trim().length} characters, under the ` +
+          `${MIN_INLINE_SUBJECT_CHARS}-character floor — supply the material inline ` +
+          "(a plan, a spec, the text under attack) or pipe a diff instead"
+      );
+    }
+
+    if (reasons.length > 0) {
+      violations.push({
+        code: "unratcheted_bypass",
+        message:
+          "--allow-unscoped is not honoured here: " +
+          reasons.join("; and ") +
+          ".",
+        remedy:
+          "--allow-unscoped means \"the scope is not a diff\", not \"there is no scope\". Its one\n" +
+          "  documented use is the P3 stress-test, where the plan under attack is supplied inline:\n" +
+          "    codex-agent start --pass adversarial --allow-unscoped \\\n" +
+          "      --property \"This plan survives contact with production: <the whole plan>\"\n" +
+          "  Otherwise pipe the diff:\n" +
+          "    git diff origin/main...HEAD -- path | codex-agent start \"...\" --pass " +
+          passKind +
+          "\n  Every honoured bypass is recorded and shows up in `codex-agent ledger`.",
+      });
+    }
+  }
 
   // Rule 1 — refuse an unscoped verification.
   //
@@ -250,7 +321,13 @@ export function evaluateContract(input: ContractInput): ContractDecision {
     });
   }
 
-  return { passKind, profile, violations, ok: violations.length === 0 };
+  return {
+    passKind,
+    profile,
+    violations,
+    ok: violations.length === 0,
+    bypass: bypassIsLoadBearing ? "unscoped" : null,
+  };
 }
 
 export function formatViolations(violations: ContractViolation[]): string {
@@ -373,7 +450,8 @@ export interface HeartbeatReport {
 export const DEFAULT_HEARTBEAT_MINUTES = 5;
 export const DEFAULT_HEARTBEAT_EXECS = 40;
 
-function formatElapsed(ms: number): string {
+/** Exported for guards.ts, so a breach message reads the same as a heartbeat one. */
+export function formatElapsed(ms: number): string {
   const totalMinutes = Math.floor(ms / 60000);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -502,47 +580,95 @@ export function detectBlockingPrompt(paneOutput: string | null | undefined): Blo
 // Run ledger
 // --------------------------------------------------------------------------
 
+/**
+ * Why a run was stopped by a guard.
+ *
+ * Declared here rather than in guards.ts because the ledger needs it and guards.ts
+ * imports this module — the same reason BlockingPromptKind mirrors state.ts above.
+ */
+export type BreachReason = "wall_clock" | "stalled" | "blocked";
+
+/**
+ * A contract control the caller deliberately switched off.
+ *
+ * Recorded so a bypass is visible after the fact. An invisible escape hatch is
+ * indistinguishable from no contract at all.
+ */
+export type BypassKind = "unscoped" | "no-contract";
+
 export interface RunLedger {
   jobId: string;
   passKind: PassKind | null;
   reasoning: string;
   model: string;
   durationMs: number | null;
-  totalTokens: number | null;
+  /**
+   * Tokens Codex reported actually spending, from its own `Token usage: total=` line.
+   * null means it was never reported — NOT zero, and never a stand-in from elsewhere.
+   */
+  tokensSpent: number | null;
+  /**
+   * Cumulative INPUT tokens read off the Codex session file.
+   *
+   * This is not spend and must never be presented as it. It excludes output entirely and
+   * counts re-sent context on every turn, so a long conversation inflates it without
+   * limit. It used to be silently substituted for `tokensSpent` whenever the usage line
+   * was missing, which is why two near-identical plan runs reported 253,275 and 1,109,604
+   * — a 4.4x spread that was pure measurement artifact, on the field anyone would have
+   * built a token ceiling from.
+   */
+  cumulativeInputTokens: number | null;
   execCount: number | null;
   verdict: string | null;
   verdictProduced: boolean;
   scoped: boolean;
+  /** Which contract control, if any, the caller switched off for this run. */
+  bypass: BypassKind | null;
   timedOut: boolean;
+  /** Set when a guard stopped this run. See guards.ts. */
+  breachReason: BreachReason | null;
+}
+
+/** How a run ended, in one token: a verdict, a breach, or nothing at all. */
+export function formatOutcome(ledger: RunLedger): string {
+  if (ledger.verdict) return ledger.verdict;
+  if (ledger.breachReason) return `killed:${ledger.breachReason}`;
+  if (ledger.timedOut) return "killed:wall_clock";
+  return "NONE";
 }
 
 export function formatLedgerRow(ledger: RunLedger): string {
   const duration = ledger.durationMs === null ? "-" : formatElapsed(ledger.durationMs);
-  const tokens = ledger.totalTokens === null ? "-" : ledger.totalTokens.toLocaleString();
+  const spent = ledger.tokensSpent === null ? "-" : ledger.tokensSpent.toLocaleString();
+  const cumulativeInput =
+    ledger.cumulativeInputTokens === null ? "-" : ledger.cumulativeInputTokens.toLocaleString();
   const execs = ledger.execCount === null ? "-" : String(ledger.execCount);
-  const verdict = ledger.verdict ?? (ledger.verdictProduced ? "?" : "NONE");
 
   return [
     ledger.jobId.padEnd(10),
     (ledger.passKind ?? "-").padEnd(12),
     duration.padEnd(8),
-    tokens.padStart(10),
+    spent.padStart(10),
+    cumulativeInput.padStart(10),
     execs.padStart(6),
     (ledger.scoped ? "yes" : "no").padEnd(7),
-    (ledger.timedOut ? "yes" : "no").padEnd(9),
-    verdict,
+    (ledger.bypass ?? "-").padEnd(11),
+    formatOutcome(ledger),
   ].join("  ");
 }
 
+// SPENT and CUM-IN are two different quantities and are shown as two columns on purpose.
+// A single "TOKENS" column is what let the two meanings blur together.
 export const LEDGER_HEADER = [
   "JOB".padEnd(10),
   "PASS".padEnd(12),
   "DURATION".padEnd(8),
-  "TOKENS".padStart(10),
+  "SPENT".padStart(10),
+  "CUM-IN".padStart(10),
   "EXECS".padStart(6),
   "SCOPED".padEnd(7),
-  "TIMEDOUT".padEnd(9),
-  "VERDICT",
+  "BYPASS".padEnd(11),
+  "OUTCOME",
 ].join("  ");
 
 /** Default wall-clock bound. The failing run had none, which is why it ran 1h50m. */
