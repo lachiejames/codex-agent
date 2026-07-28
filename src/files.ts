@@ -58,18 +58,52 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+export interface EntryChoice {
+  chosen: string;
+  others: string[];
+}
+
 /**
- * Resolve one path segment against the real entries of its parent, ignoring case.
+ * Choose which of a directory's entries satisfies a wanted name, ignoring case.
  *
- * When several entries differ only by case, an exact-case match to the wanted name wins and
- * the remainder are reported as ambiguous; ordering is otherwise lexicographic, so the
- * choice is deterministic rather than dependent on directory iteration order.
+ * Pure on purpose. This is the only part of the lookup whose behaviour differs between a
+ * case-sensitive and a case-insensitive filesystem, and it is the part worth testing hardest
+ * — so it takes the listing as data rather than reading a directory. Tests pass synthetic
+ * listings and run identically on every machine, instead of skipping when the local
+ * filesystem cannot represent two entries differing only by case.
+ *
+ * When several entries match, an exact-case match to the wanted name wins and the rest are
+ * reported as ambiguous; ordering is otherwise lexicographic, so the choice never depends on
+ * directory iteration order.
+ */
+export function chooseEntry({
+  entries,
+  wantedName,
+}: {
+  entries: string[];
+  wantedName: string;
+}): EntryChoice | null {
+  const wantedLower = wantedName.toLowerCase();
+  const matches = entries.filter((entry) => entry.toLowerCase() === wantedLower).sort();
+
+  if (matches.length === 0) return null;
+
+  const chosen = matches.find((entry) => entry === wantedName) ?? matches[0];
+  return { chosen, others: matches.filter((entry) => entry !== chosen) };
+}
+
+/**
+ * Resolve one path segment against the real entries of its parent.
+ *
+ * The effectful shell around `chooseEntry`: it lists the directory and discards entries of
+ * the wrong kind — a directory merely named like a map is not a map — then defers the actual
+ * choice to the pure function.
  */
 function resolveSegment(
   parent: string,
   wantedName: string,
   wantDirectory: boolean
-): { chosen: string; others: string[] } | null {
+): EntryChoice | null {
   let entries: string[];
   try {
     entries = readdirSync(parent);
@@ -77,24 +111,16 @@ function resolveSegment(
     return null;
   }
 
-  const wantedLower = wantedName.toLowerCase();
-  const matches = entries
-    .filter((entry) => entry.toLowerCase() === wantedLower)
-    .filter((entry) => {
-      try {
-        const stat = statSync(join(parent, entry));
-        // A file where a file is wanted — never a directory merely named like one.
-        return wantDirectory ? stat.isDirectory() : stat.isFile();
-      } catch {
-        return false;
-      }
-    })
-    .sort();
+  const usable = entries.filter((entry) => {
+    try {
+      const stat = statSync(join(parent, entry));
+      return wantDirectory ? stat.isDirectory() : stat.isFile();
+    } catch {
+      return false;
+    }
+  });
 
-  if (matches.length === 0) return null;
-
-  const chosen = matches.find((entry) => entry === wantedName) ?? matches[0];
-  return { chosen, others: matches.filter((entry) => entry !== chosen) };
+  return chooseEntry({ entries: usable, wantedName });
 }
 
 /**
