@@ -1,0 +1,58 @@
+name: CI
+
+# This repo is the ONE DOOR to Codex for every project on this machine, and it had no CI at all —
+# every PR merged on local evidence alone. That is the gap this closes.
+#
+# Deliberately narrow: it proves the suite passes and the shipped CLI builds. It does NOT typecheck,
+# because there is no `tsconfig.json` in the repo yet — adding one is a separate change, not something
+# to smuggle into a CI workflow. See the note at the bottom.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes an in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned to the version this repo is developed against, so CI cannot pass on a
+          # runtime the author never ran. Bump deliberately, never implicitly.
+          bun-version: 1.3.14
+
+      # --frozen-lockfile fails the run if bun.lock disagrees with package.json, so a
+      # dependency added without committing the lockfile is caught here rather than
+      # silently resolving differently on someone else's machine.
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+      # The CLI is what actually ships and what every other project invokes, so a build
+      # failure is a broken door even when the tests are green.
+      - name: Build the CLI
+        run: bun run build
+
+# FOLLOW-UP, deliberately not done here:
+#   - No typecheck step. `typescript` is a devDependency but there is no `tsconfig.json`, so
+#     `tsc --noEmit` would run on defaults and fail on module resolution rather than on real type
+#     errors. Add a tsconfig in its own change, then add the step.
+#   - No lint step. There is no linter configured yet.
+#   Both are worth doing; neither belongs in the same commit as "give this repo a CI at all".
