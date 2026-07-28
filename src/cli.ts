@@ -125,7 +125,10 @@ Options:
   --notify-on-complete <cmd>  Run command when job completes
   -d, --dir <path>           Working directory (default: cwd)
   --parent-session <id>      Parent session ID for linkage
-  --map                      Include codebase map if available
+  --map                      Include the codebase map if available. A bare flag: it takes no
+                             value, so the prompt stays a positional. Looks for
+                             docs/CODEBASE_MAP.md, CODEBASE_MAP.md, docs/ARCHITECTURE.md
+                             (case-insensitive) and prints the path it resolved
   --dry-run                  Show prompt without executing
   --strip-ansi               Remove ANSI and Codex TUI noise from output (for capture/output)
   --clean                    Alias for --strip-ansi
@@ -642,9 +645,27 @@ async function prepareLaunch(taskPrompt: string, options: Options): Promise<Prep
   });
 
   if (options.includeMap) {
-    console.error(
-      context.accounting.map.included ? "Included codebase map" : "No codebase map found",
-    );
+    // Say WHICH file, and how big. "Included codebase map" with no path meant a caller
+    // could not tell whether they got the map they meant, an unrelated architecture
+    // document, or nothing — and one repo was silently shipping ~6KB of the second for
+    // weeks. A result you cannot attribute is not a result.
+    const map = context.accounting.map;
+    if (map.included) {
+      console.error(
+        `Included codebase map: ${map.path} ` +
+          `(~${map.estimatedTokens.toLocaleString()} tokens, ${map.bytes.toLocaleString()} bytes)`
+      );
+      for (const other of map.ambiguousWith) {
+        console.error(
+          `  warning: ${other} also exists and differs only by case — it was NOT used.`
+        );
+      }
+    } else {
+      console.error(
+        `No codebase map found under ${options.dir} ` +
+          `(looked for docs/CODEBASE_MAP.md, CODEBASE_MAP.md, docs/ARCHITECTURE.md; case-insensitive)`
+      );
+    }
   }
 
   return {

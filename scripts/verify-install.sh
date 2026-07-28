@@ -207,7 +207,18 @@ if [ "$DO_LIVE" = "1" ]; then
       bad "no verdict in ${elapsed}s — check: codex-agent ledger"
     fi
 
-    if grep -q "BLOCKED" <<<"$out"; then
+    # Anchored on the CLI's own report line, not on the word appearing anywhere in $out.
+    #
+    # $out contains the whole transcript, and the transcript contains the diff under review
+    # — so a bare `grep -q BLOCKED` also matched the *source being reviewed*. It went red
+    # the moment src/guards.ts introduced the string "is BLOCKED on an interactive Codex
+    # prompt", reporting a blocked agent for a run that had just returned VERDICT: CLEAN in
+    # 28s. A check that fails on the vocabulary of the code it is testing is worse than no
+    # check: it teaches you to ignore the gate.
+    #
+    # The guard's real report is printed to stderr as `contract: job <id> is BLOCKED ...`,
+    # always at column 0, whereas every diff line carries a +/-/space prefix.
+    if grep -qE '^contract: .*BLOCKED' <<<"$out"; then
       bad "agent was blocked on an interactive prompt — is this dir trusted in ~/.codex/config.toml?"
     fi
   fi

@@ -168,12 +168,17 @@ artifact. Run the phases in sequence — each takes the previous one's output.
 ### P1 — Recon: what is actually there?
 
 ```bash
-codex-agent start --pass plan --map \
+codex-agent start --pass plan \
   "Map how <subsystem> works today. Cover: entry points, data flow, where state lives,
    what already handles the concern I am about to change, and what would break if it
    changed. Do not propose solutions yet." \
-  --wait
+  --map --wait
 ```
+
+The prompt is a **positional argument**. `--map` and `--wait` are bare booleans that consume
+nothing, so keep them after the prompt — writing `--map "<prompt>"` also works, but it reads
+as though `--map` takes the prompt as its value, and that misreading is how map injection got
+switched on by accident in places nobody intended.
 
 Read the output. **You** decide what is true and what the agent misread.
 
@@ -183,12 +188,12 @@ Feed P1's findings back in. Ask for one recommended approach plus the alternativ
 rejected and why — a design with no discarded options has not been thought about.
 
 ```bash
-codex-agent start --pass plan --map \
+codex-agent start --pass plan \
   "Given this recon: <paste P1 conclusions>
 
    Design the change to <goal>. Give ONE recommended approach, then the alternatives you
    rejected and why. Call out every assumption that, if wrong, changes the answer." \
-  --wait
+  --map --wait
 ```
 
 ### P3 — Stress-test: how does this plan fail?
@@ -287,9 +292,30 @@ is. When it contradicts itself, investigate rather than picking a side.
 
 ## The codebase map
 
-`--map` injects `docs/CODEBASE_MAP.md` if present, which is worth it for **planning**
-passes. It is not a substitute for a diff on review passes — that substitution is
-exactly what the 1h50m run did.
+`--map` injects a codebase map if present, which is worth it for **planning** passes. It is
+not a substitute for a diff on review passes — that substitution is exactly what the 1h50m
+run did.
+
+It looks for these, **case-insensitively**, and takes the first that exists:
+
+1. `docs/CODEBASE_MAP.md`
+2. `CODEBASE_MAP.md`
+3. `docs/ARCHITECTURE.md`
+
+Two things to know, both learned the hard way:
+
+- **Candidate 3 is a fallback, and it will match a plain architecture document.** A repo with
+  no map but a `docs/architecture.md` gets that injected. That is often not what you wanted.
+- **The CLI now prints which file it resolved**, with its size, plus a warning if another
+  file differs from it only by case. Read that line. The lookup used to report a path that
+  did not exist — it asked for `docs/ARCHITECTURE.md`, macOS opened `docs/architecture.md`,
+  and the same command on Linux injected nothing at all, silently either way.
+
+```
+Included codebase map: /repo/docs/CODEBASE_MAP.md (~2,400 tokens, 9,612 bytes)
+No codebase map found under /repo (looked for docs/CODEBASE_MAP.md, CODEBASE_MAP.md,
+  docs/ARCHITECTURE.md; case-insensitive)
+```
 
 **You generate the map** — it is body work, no separate tool needed:
 
@@ -447,7 +473,7 @@ never substitute `CUM-IN` for it.
 | `--no-contract` | flag | Disable enforcement (escape hatch); recorded as a bypass |
 | `-s`, `--sandbox` | read-only, workspace-write, danger-full-access | Default `read-only` |
 | `-r`, `--reasoning` | low, medium, high, xhigh | Overrides the pass profile |
-| `--map` | flag | Include `docs/CODEBASE_MAP.md` |
+| `--map` | flag (takes no value) | Include the codebase map; the resolved path is printed |
 | `-w`, `--wait` | flag | Return once answered, and reap the session. Bounds apply with or without it |
 | `--dry-run` | flag | Show the shaped prompt without executing |
 

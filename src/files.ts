@@ -1,31 +1,168 @@
-// File utilities for codebase map injection
+// File utilities for codebase map injection.
+//
+// The map lookup used to be filesystem-dependent, which made it lie.
+//
+// It tried three literal paths with `readFileSync` — `docs/CODEBASE_MAP.md`,
+// `CODEBASE_MAP.md`, `docs/ARCHITECTURE.md` — and returned the path it had *asked* for.
+// On macOS's case-insensitive APFS, asking for `docs/ARCHITECTURE.md` happily opens
+// `docs/architecture.md`. So a repo with none of the three intended maps, but a lowercase
+// `docs/architecture.md`, silently got ~6KB of an architecture document nobody chose
+// injected into every `--map` planning prompt — and the same invocation on a
+// case-sensitive filesystem injected nothing at all. Identical command, different
+// context, no warning either way.
+//
+// Worse, the path it reported did not exist. `findCodebaseMap` returned
+// `.../docs/ARCHITECTURE.md` while the actual directory entry was `.../docs/architecture.md`,
+// so reporting the path without fixing the lookup would just have printed a fabrication.
+//
+// The fix is to match against the real directory entries rather than to guess casings.
+// Adding lowercase candidates to the list was the cheaper option and would not have worked:
+// on a case-insensitive filesystem `docs/CODEBASE_MAP.md` still resolves to
+// `docs/codebase_map.md` and still reports the casing it asked for, and enumerating
+// variants never covers `Architecture.md` or `ARCHITECTURE.MD`. Reading the directory gives
+// the same answer on both kinds of filesystem, returns the name that is actually on disk,
+// and is the only version that can notice several case variants existing at once.
 
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { readFileSync, readdirSync, realpathSync, statSync } from "fs";
+import { join, resolve } from "path";
 
 export interface CodebaseMapFile {
+  /** The real path, as it exists on disk — never a casing that was merely asked for. */
   path: string;
   content: string;
+  /**
+   * Other case variants of the same name that also exist and were not chosen.
+   *
+   * Only reachable on a case-sensitive filesystem, where `docs/ARCHITECTURE.md` and
+   * `docs/architecture.md` can both exist. Surfaced rather than silently resolved, because
+   * "which file did I actually get" is the whole point of this module.
+   */
+  ambiguousWith: string[];
 }
+
+/**
+ * Candidate map locations, in priority order.
+ *
+ * `docs/ARCHITECTURE.md` is an inherited fallback and is deliberately kept — but it is now
+ * *reported*, so a caller who did not mean to send an architecture document can see that it
+ * happened instead of finding out from the token bill.
+ */
+const MAP_CANDIDATES = [
+  "docs/CODEBASE_MAP.md",
+  "CODEBASE_MAP.md",
+  "docs/ARCHITECTURE.md",
+] as const;
 
 export function estimateTokens(text: string): number {
   // Rough estimate: ~4 characters per token
   return Math.ceil(text.length / 4);
 }
 
-export async function findCodebaseMap(cwd: string): Promise<CodebaseMapFile | null> {
-  const mapPaths = [
-    resolve(cwd, "docs/CODEBASE_MAP.md"),
-    resolve(cwd, "CODEBASE_MAP.md"),
-    resolve(cwd, "docs/ARCHITECTURE.md"),
-  ];
+/**
+ * Resolve one path segment against the real entries of its parent, ignoring case.
+ *
+ * When several entries differ only by case, an exact-case match to the wanted name wins and
+ * the remainder are reported as ambiguous; ordering is otherwise lexicographic, so the
+ * choice is deterministic rather than dependent on directory iteration order.
+ */
+function resolveSegment(
+  parent: string,
+  wantedName: string,
+  wantDirectory: boolean
+): { chosen: string; others: string[] } | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(parent);
+  } catch {
+    return null;
+  }
 
-  for (const mapPath of mapPaths) {
+  const wantedLower = wantedName.toLowerCase();
+  const matches = entries
+    .filter((entry) => entry.toLowerCase() === wantedLower)
+    .filter((entry) => {
+      try {
+        const stat = statSync(join(parent, entry));
+        // A file where a file is wanted — never a directory merely named like one.
+        return wantDirectory ? stat.isDirectory() : stat.isFile();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+
+  if (matches.length === 0) return null;
+
+  const chosen = matches.find((entry) => entry === wantedName) ?? matches[0];
+  return { chosen, others: matches.filter((entry) => entry !== chosen) };
+}
+
+/**
+ * Resolve a candidate to the path that is actually on disk, one segment at a time.
+ *
+ * EVERY segment is resolved, not just the filename. An adversarial pass caught the first
+ * version doing only the basename: a repo with `Docs/CODEBASE_MAP.md` still resolved through
+ * the requested `docs` on a case-insensitive filesystem, returned a path with a fabricated
+ * directory casing, and found nothing at all on a case-sensitive one. That is the same
+ * defect this module exists to remove, one level up the path — so the walk covers the whole
+ * path rather than its last component.
+ */
+function resolveCandidate(
+  cwd: string,
+  candidate: string
+): { path: string; ambiguousWith: string[] } | null {
+  const segments = candidate.split("/").filter((segment) => segment.length > 0 && segment !== ".");
+  if (segments.length === 0) return null;
+
+  let current = resolve(cwd);
+  const ambiguousWith: string[] = [];
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const isFinalSegment = index === segments.length - 1;
+    const match = resolveSegment(current, segments[index], !isFinalSegment);
+    if (!match) return null;
+
+    ambiguousWith.push(...match.others.map((other) => join(current, other)));
+    current = join(current, match.chosen);
+  }
+
+  return { path: canonicalise(current), ambiguousWith: ambiguousWith.map(canonicalise) };
+}
+
+/**
+ * Reduce a path to the one the filesystem itself reports.
+ *
+ * The segment walk above only canonicalises the segments it walks — the `cwd` prefix arrives
+ * from `process.cwd()` or a `-d` flag and can carry any casing the caller typed. A third
+ * adversarial pass used exactly that: real directory `/tmp/Repo`, called as `/tmp/repo`, and
+ * the reported path kept the requested `repo`.
+ *
+ * `realpathSync.native` asks the filesystem for the true name of every component, which ends
+ * the whole class rather than one more instance of it. It also resolves symlinks, so a repo
+ * reached through a symlink is reported at its real location — correct for a line whose only
+ * job is to say which bytes were read, and worth knowing because this repo is itself reached
+ * through `~/.codex-orchestrator`.
+ */
+function canonicalise(target: string): string {
+  try {
+    return realpathSync.native(target);
+  } catch {
+    // Raced away between the walk and here; the un-canonicalised path is still the best
+    // answer available and the caller will fail on the read instead.
+    return target;
+  }
+}
+
+export async function findCodebaseMap(cwd: string): Promise<CodebaseMapFile | null> {
+  for (const candidate of MAP_CANDIDATES) {
+    const resolved = resolveCandidate(cwd, candidate);
+    if (!resolved) continue;
+
     try {
-      const content = readFileSync(mapPath, "utf-8");
-      return { path: mapPath, content };
+      const content = readFileSync(resolved.path, "utf-8");
+      return { path: resolved.path, content, ambiguousWith: resolved.ambiguousWith };
     } catch {
-      // Try next path
+      // Unreadable despite existing — fall through to the next candidate.
     }
   }
 

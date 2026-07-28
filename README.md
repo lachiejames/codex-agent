@@ -6,7 +6,8 @@ with the original's brain/body split reversed.
 
 ```bash
 # Plan (broad by design — it converges on one artifact)
-codex-agent start --pass plan --map "Design the retry strategy for the outbound queue" --wait
+# The prompt is a positional; --map and --wait are bare flags that consume nothing.
+codex-agent start --pass plan "Design the retry strategy for the outbound queue" --map --wait
 
 # Review one property of a diff (bounded; must reach a verdict)
 git diff origin/main...HEAD -- src/queue.ts |
@@ -176,7 +177,7 @@ run is not a usable result.
 | `--no-contract`    | flag                                            | Disable enforcement; recorded as a bypass |
 | `-s`, `--sandbox`  | read-only, workspace-write, danger-full-access  | Default `read-only`                      |
 | `-r`, `--reasoning`| low, medium, high, xhigh                        | Overrides the profile                    |
-| `--map`            | flag                                            | Include `docs/CODEBASE_MAP.md`           |
+| `--map`            | flag (takes no value)                           | Include the codebase map; prints the resolved path |
 | `-w`, `--wait`     | flag                                            | Return once answered and reap the session. Bounds apply with or without it |
 | `--dry-run`        | flag                                            | Show the shaped prompt without executing |
 

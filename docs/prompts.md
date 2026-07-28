@@ -60,15 +60,15 @@ Run three phases in sequence, reading and judging each output before starting th
 run is read-only by default; leave it that way.
 
 P1 — Recon. What is actually there?
-  codex-agent start --pass plan --map --wait "Map how <subsystem> works today: entry points,
+  codex-agent start --pass plan "Map how <subsystem> works today: entry points,
   data flow, where state lives, what already handles <the concern>, and what would break if it
-  changed. Do not propose solutions yet."
+  changed. Do not propose solutions yet." --map --wait
 
 P2 — Design. Feed P1's conclusions back in. Demand the rejected alternatives — a design with no
 discarded options has not been thought about.
-  codex-agent start --pass plan --map --wait "Given this recon: <paste P1>. Design the change to
+  codex-agent start --pass plan "Given this recon: <paste P1>. Design the change to
   <goal>. Give ONE recommended approach, then the alternatives you rejected and why. Call out
-  every assumption that, if wrong, changes the answer."
+  every assumption that, if wrong, changes the answer." --map --wait
 
 P3 — Stress-test THE PLAN, not the code. This is the highest-value phase and the one people
 skip. A design flaw caught here costs a paragraph; caught after implementation it costs the

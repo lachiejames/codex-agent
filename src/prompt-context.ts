@@ -21,6 +21,8 @@ export interface PromptContextMapAccounting extends PromptContextTextEstimate {
   included: boolean;
   path: string | null;
   cartographerTotalTokens: number | null;
+  /** Case variants of the resolved map that also exist and were not chosen. */
+  ambiguousWith: string[];
 }
 
 export interface PromptContextAccounting extends PromptContextTextEstimate {
@@ -80,6 +82,7 @@ export async function buildPromptContext(
 
   let mapContent: string | null = null;
   let mapPath: string | null = null;
+  let mapAmbiguousWith: string[] = [];
 
   if (options.includeMap) {
     if (options.mapContent !== undefined) {
@@ -89,6 +92,7 @@ export async function buildPromptContext(
       const map = await findCodebaseMap(options.cwd ?? process.cwd());
       mapContent = map?.content ?? null;
       mapPath = map?.path ?? null;
+      mapAmbiguousWith = map?.ambiguousWith ?? [];
     }
   }
 
@@ -106,6 +110,7 @@ export async function buildPromptContext(
           bytes: 0,
           estimatedTokens: 0,
           cartographerTotalTokens: null,
+          ambiguousWith: [],
         },
         components,
       },
@@ -132,6 +137,7 @@ export async function buildPromptContext(
         bytes: mapComponent.bytes,
         estimatedTokens: mapComponent.estimatedTokens,
         cartographerTotalTokens: metadata.totalTokens,
+        ambiguousWith: mapAmbiguousWith,
       },
       components,
     },

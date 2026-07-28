@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -44,6 +44,7 @@ describe("buildPromptContext", () => {
       bytes: 0,
       estimatedTokens: 0,
       cartographerTotalTokens: null,
+      ambiguousWith: [],
     });
     expect(result.accounting.components.map((component) => component.kind)).toEqual(["task_prompt"]);
   });
@@ -73,6 +74,7 @@ describe("buildPromptContext", () => {
       bytes: Buffer.byteLength(map, "utf8"),
       estimatedTokens: estimateTokens(map),
       cartographerTotalTokens: 12000,
+      ambiguousWith: [],
     });
     expect(result.accounting.taskPrompt).toEqual(estimatePromptText(taskPrompt));
     expect(result.accounting.estimatedTokens).toBe(estimateTokens(result.prompt));
@@ -108,7 +110,11 @@ describe("buildPromptContext", () => {
     });
 
     expect(result.accounting.map.included).toBe(true);
-    expect(result.accounting.map.path).toBe(mapPath);
+    // The reported path is canonical, so a fabricated casing cannot survive into it. That
+    // also resolves symlinks — `mkdtemp` gives `/var/folders/...`, a symlink to
+    // `/private/var/folders/...` — which is why this compares against the real path rather
+    // than the one the fixture happened to write to.
+    expect(result.accounting.map.path).toBe(realpathSync.native(mapPath));
     expect(result.accounting.map.estimatedTokens).toBe(estimateTokens(map));
     expect(result.accounting.map.cartographerTotalTokens).toBe(42);
   });

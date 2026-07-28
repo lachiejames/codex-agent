@@ -50,8 +50,8 @@ trust_level = "trusted"
 ## Usage
 
 ```bash
-# Plan
-codex-agent start --pass plan --map "Design the retry strategy" --wait
+# Plan — the prompt is a positional; --map and --wait are bare flags taking no value
+codex-agent start --pass plan "Design the retry strategy" --map --wait
 
 # Stress-test the plan before writing any of it — the highest-value phase
 codex-agent start --pass adversarial --allow-unscoped --wait \
