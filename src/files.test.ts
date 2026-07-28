@@ -6,11 +6,11 @@
 // command, different prompt, no warning. These tests therefore assert on the RESOLVED PATH,
 // not merely on whether something was found, because "found something" was never the bug.
 
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
-import { findCodebaseMap, loadCodebaseMap } from "./files.ts";
+import { chooseEntry, findCodebaseMap, loadCodebaseMap } from "./files.ts";
 
 let root: string;
 
@@ -31,21 +31,10 @@ function writeMap(relativePath: string, content: string): string {
   return realpathSync.native(full);
 }
 
-/**
- * Whether this filesystem is case-insensitive, probed once at load.
- *
- * The ambiguity cases cannot be constructed on a case-insensitive filesystem — the second
- * write lands on the same inode — so they are skipped there via `test.skipIf`, which the
- * runner reports. An early `return` inside the test body would have made them silently pass,
- * which is the same "reports success, did nothing" failure this PR exists to remove.
- *
- * On Linux CI these run for real, which is precisely why they are worth having.
- */
-const CASE_INSENSITIVE_FS = (() => {
-  const probeRoot = mkdtempSync(join(tmpdir(), "codex-agent-case-probe-"));
-  writeFileSync(join(probeRoot, "CaseProbe.md"), "probe");
-  return existsSync(join(probeRoot, "caseprobe.md"));
-})();
+// No filesystem probing, no skips, no deferring anything to CI. The behaviour that differs
+// between case-sensitive and case-insensitive filesystems is `chooseEntry`, which takes a
+// directory listing as data — so it is tested directly, and every test in this file runs on
+// every machine.
 
 describe("findCodebaseMap — candidate priority", () => {
   test("prefers docs/CODEBASE_MAP.md", async () => {
@@ -163,40 +152,84 @@ describe("INVARIANT: the reported path is the one the filesystem reports", () =>
   }
 
   test("canonical even when the caller supplies a mis-cased cwd", async () => {
-    // The third adversarial finding: real directory `Repo`, called as `repo`. Only
-    // constructible on a case-insensitive filesystem, where the mis-cased cwd still opens.
-    if (!CASE_INSENSITIVE_FS) return;
-
-    const expected = writeMap("docs/CODEBASE_MAP.md", "# map");
+    // The third adversarial finding: real directory `Repo`, called as `repo`. A mis-cased cwd
+    // opens on a case-insensitive filesystem and does not on a case-sensitive one, so the
+    // requirement is stated as one unconditional assertion that holds on both: whatever comes
+    // back is either nothing or canonical. Never a path carrying the casing that was asked
+    // for. No branch on the platform, so nothing silently does nothing.
+    writeMap("docs/CODEBASE_MAP.md", "# map");
     const found = await findCodebaseMap(root.toUpperCase());
 
-    // Either it does not resolve at all, or it resolves to the real path — never to a path
-    // carrying the casing that was asked for.
-    if (found) expect(found.path).toBe(expected);
+    expect(found === null || found.path === realpathSync.native(found.path)).toBe(true);
   });
 });
 
-describe("findCodebaseMap — ambiguity is deterministic and reported", () => {
-  test.skipIf(CASE_INSENSITIVE_FS)("prefers the exact-case candidate and names the variant it ignored", async () => {
-    const exact = writeMap("docs/ARCHITECTURE.md", "# shouty");
-    const variant = writeMap("docs/architecture.md", "# quiet");
+describe("chooseEntry", () => {
+  // Two entries differing only by case cannot coexist on a case-insensitive filesystem, so
+  // these used to be filesystem tests that skipped on macOS and only really ran in CI. The
+  // decision is data in, decision out — so it is tested as such, everywhere.
 
-    const found = await findCodebaseMap(root);
-    expect(found?.path).toBe(exact);
-    expect(found?.content).toBe("# shouty");
-    expect(found?.ambiguousWith).toEqual([variant]);
+  test("matches ignoring case", () => {
+    expect(chooseEntry({ entries: ["architecture.md"], wantedName: "ARCHITECTURE.md" })).toEqual({
+      chosen: "architecture.md",
+      others: [],
+    });
   });
 
-  test.skipIf(CASE_INSENSITIVE_FS)("picks lexicographically when no variant matches the candidate exactly", async () => {
-    writeMap("docs/Architecture.md", "# title case");
-    writeMap("docs/architecture.md", "# quiet");
-
-    const found = await findCodebaseMap(root);
-    // Deterministic rather than dependent on directory iteration order.
-    expect(found?.path).toBe(join(root, "docs", "Architecture.md"));
-    expect(found?.ambiguousWith).toEqual([join(root, "docs", "architecture.md")]);
+  test("returns null when nothing matches", () => {
+    expect(chooseEntry({ entries: ["README.md", "docs"], wantedName: "CODEBASE_MAP.md" })).toBeNull();
   });
 
+  test("returns null for an empty listing", () => {
+    expect(chooseEntry({ entries: [], wantedName: "CODEBASE_MAP.md" })).toBeNull();
+  });
+
+  test("prefers the exact-case entry and names the variants it ignored", () => {
+    expect(
+      chooseEntry({
+        entries: ["architecture.md", "ARCHITECTURE.md", "Architecture.md"],
+        wantedName: "ARCHITECTURE.md",
+      })
+    ).toEqual({ chosen: "ARCHITECTURE.md", others: ["Architecture.md", "architecture.md"] });
+  });
+
+  test("picks lexicographically when no variant matches exactly", () => {
+    // Deterministic rather than dependent on directory iteration order, which is why the
+    // listing below is deliberately not sorted.
+    expect(
+      chooseEntry({
+        entries: ["architecture.md", "Architecture.md"],
+        wantedName: "ARCHITECTURE.md",
+      })
+    ).toEqual({ chosen: "Architecture.md", others: ["architecture.md"] });
+  });
+
+  test("is not affected by the order entries arrive in", () => {
+    const forwards = chooseEntry({
+      entries: ["Architecture.md", "architecture.md"],
+      wantedName: "ARCHITECTURE.md",
+    });
+    const backwards = chooseEntry({
+      entries: ["architecture.md", "Architecture.md"],
+      wantedName: "ARCHITECTURE.md",
+    });
+    expect(forwards).toEqual(backwards);
+  });
+
+  test("ignores entries that merely contain the wanted name", () => {
+    expect(
+      chooseEntry({ entries: ["CODEBASE_MAP.md.bak", "old-CODEBASE_MAP.md"], wantedName: "CODEBASE_MAP.md" })
+    ).toBeNull();
+  });
+
+  test("reports no ambiguity for a single match", () => {
+    expect(
+      chooseEntry({ entries: ["docs", "CODEBASE_MAP.md"], wantedName: "CODEBASE_MAP.md" })?.others
+    ).toEqual([]);
+  });
+});
+
+describe("findCodebaseMap — ambiguity", () => {
   test("reports no ambiguity in the ordinary single-file case", async () => {
     writeMap("docs/CODEBASE_MAP.md", "# canonical");
     expect((await findCodebaseMap(root))?.ambiguousWith).toEqual([]);

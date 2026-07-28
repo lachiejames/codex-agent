@@ -93,15 +93,20 @@ describe("enforceRunGuards — wall clock on the background path", () => {
   test("leaves a diagnosable artifact rather than a bare failure", () => {
     runningJob({ id: "wall0003", startedAt: agoIso(46 * MINUTE), timeoutMinutes: 45 });
 
-    enforceRunGuards("wall0003");
+    // Injected clock, so the recorded timestamps are asserted exactly rather than merely
+    // being non-empty.
+    const nowMs = Date.parse("2026-07-29T12:00:00.000Z");
+    enforceRunGuards("wall0003", { nowMs });
     const job = loadJob("wall0003");
 
     expect(job?.breachReason).toBe("wall_clock");
     expect(job?.breachMessage).toContain("wall-clock bound of 45m");
     expect(job?.breachMessage).toContain("codex-agent report wall0003");
-    expect(job?.breachAt).toBeTruthy();
+    expect(job?.breachAt).toBe("2026-07-29T12:00:00.000Z");
+    expect(job?.completedAt).toBe("2026-07-29T12:00:00.000Z");
     expect(job?.timedOut).toBe(true);
-    expect(job?.error).toBeTruthy();
+    // The error a caller sees must be the breach explanation, not a generic failure.
+    expect(job?.error).toBe(job?.breachMessage);
   });
 
   test("ignores a job that is not running", () => {
