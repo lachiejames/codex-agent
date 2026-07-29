@@ -3,7 +3,9 @@ name: CI
 # This repo is the ONE DOOR to Codex for every project on this machine, and it had no CI at all —
 # every PR merged on local evidence alone. That is the gap this closes.
 #
-# It proves the suite passes, the types check, and the shipped CLI builds.
+# It runs `bun run validate` — the same gate `git push` runs locally, and the only list of
+# checks this repo has. The bundle `build` produces is NOT what ships: `bin/codex-agent` execs
+# `src/cli.ts` directly, so the build step is a bundleability check, not a release artifact.
 
 on:
   push:
@@ -19,8 +21,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: test + build
+  gate:
+    name: gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -40,21 +42,13 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      # Runs before the tests: a type error is a faster and more specific failure than
-      # whatever the suite happens to throw downstream of it. Adding this found a real
-      # signature bug (normalizeJobLifecycle claimed to return the caller's turnState while
-      # overwriting it) and four dead duplicate keys in test fixtures.
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Test
-        run: bun test
-
-      # The CLI is what actually ships and what every other project invokes, so a build
-      # failure is a broken door even when the tests are green.
-      - name: Build the CLI
-        run: bun run build
-
-# FOLLOW-UP, deliberately not done here:
-#   - No lint step. There is no linter configured yet, and adding one mid-migration would bury
-#     real diffs under formatting churn. Worth doing once the transport rewrite has landed.
+      # ONE step, deliberately. This used to be three steps — typecheck, test, build — which
+      # meant CI enforced a WEAKER bar than the local pre-push hook: no lint, no format check,
+      # no test-discipline scan, and no dead-code check. A lint regression merged on green CI,
+      # and `knip` sat at exit 1 for as long as it had existed because nothing ran it.
+      #
+      # Reproducing the list here is what let the two drift apart, so CI no longer has its own
+      # list. `bun run validate` IS the list (src/gate/core.ts), it does not short-circuit, and
+      # one run reports every failure. Anything added to the gate is enforced here for free.
+      - name: Gate
+        run: bun run validate

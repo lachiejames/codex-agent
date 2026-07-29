@@ -71,24 +71,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-section "2. Test suite (includes the skill-copy drift guard)"
+section "2. The gate (includes the skill-copy drift guard)"
 
-if (cd "$REPO" && bun test >/tmp/codex-agent-verify-tests.log 2>&1); then
-  ok "bun test green ($(grep -oE '[0-9]+ pass' /tmp/codex-agent-verify-tests.log | head -1))"
+# This used to run `bun test`, `bun run typecheck` and `bun run lint` as three separate
+# assertions — a hand-picked SUBSET of the local gate that silently omitted the format check,
+# the test-discipline scan and the dead-code check. Three places listing quality checks meant
+# three different bars; this script's job is to assert the spec on THIS machine, not to keep
+# its own opinion about which checks matter.
+#
+# `bun run validate` is the one list (src/gate/core.ts). It does not short-circuit, so the log
+# below names every failure rather than only the first.
+if (cd "$REPO" && bun run validate >/tmp/codex-agent-verify-gate.log 2>&1); then
+  ok "gate green: $(grep -oE '[0-9]+ pass' /tmp/codex-agent-verify-gate.log | head -1) — format, lint, types, test-discipline, dead-code, tests, build"
 else
-  bad "bun test FAILED — see /tmp/codex-agent-verify-tests.log"
-fi
-
-if (cd "$REPO" && bun run typecheck >/tmp/codex-agent-verify-tsc.log 2>&1); then
-  ok "typecheck clean"
-else
-  bad "typecheck FAILED ($(grep -c 'error TS' /tmp/codex-agent-verify-tsc.log) errors) — see /tmp/codex-agent-verify-tsc.log"
-fi
-
-if (cd "$REPO" && bun run lint >/tmp/codex-agent-verify-lint.log 2>&1); then
-  ok "oxlint clean"
-else
-  bad "oxlint FAILED — see /tmp/codex-agent-verify-lint.log"
+  bad "gate FAILED ($(grep -oE 'gate: .*' /tmp/codex-agent-verify-gate.log | head -1)) — see /tmp/codex-agent-verify-gate.log"
 fi
 
 # ---------------------------------------------------------------------------
