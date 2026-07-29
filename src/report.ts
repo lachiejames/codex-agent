@@ -136,6 +136,9 @@ export interface RunReport {
  */
 const ASKED_PREVIEW_CHARS = 2_000;
 
+// max-lines-exempt: one linear template. Every line appends one section of the report in the
+// order it is printed, and the section order IS the contract with the reader. Splitting it into
+// per-section helpers would scatter that order across the file without removing a branch.
 export function formatRunReport(report: RunReport): string {
   const promptPath = report.promptPath;
   const lines: string[] = [

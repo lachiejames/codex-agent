@@ -62,6 +62,7 @@ export function gateChecks(): readonly GateCheck[] {
     { args: ["run", "lint"], cmd: "bun", name: "lint" },
     { args: ["run", "typecheck"], cmd: "bun", name: "typecheck" },
     { args: ["run", "check:tests"], cmd: "bun", name: "test-discipline" },
+    { args: ["run", "check:conventions"], cmd: "bun", name: "conventions" },
     { args: ["run", "knip"], cmd: "bun", name: "dead-code" },
     { args: ["test"], cmd: "bun", name: "test" },
     { args: ["run", "build"], cmd: "bun", name: "build" },

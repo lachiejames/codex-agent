@@ -8,6 +8,7 @@ describe("gateChecks", () => {
       "lint",
       "typecheck",
       "test-discipline",
+      "conventions",
       "dead-code",
       "test",
       "build",

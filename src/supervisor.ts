@@ -121,6 +121,9 @@ function drainStream(run: Run): boolean {
   return run.metrics.eventCount > before;
 }
 
+// max-lines-exempt: one poll loop over a live child process. Its parts share mutable loop state
+// (exit status, last-seen event count, warn-already-sent) and splitting them means passing that
+// state across a boundary, which is how a warn gets sent twice.
 async function watchInvocation(run: Run, child: ChildProcess, turnStartedAtMs: number): Promise<WatchOutcome> {
   let exited: number | null = null;
   child.on("exit", (code, signal) => {
@@ -381,6 +384,11 @@ function recordBreach(run: Run, reason: KillReason, message: string): void {
 // The loop
 // --------------------------------------------------------------------------
 
+// max-lines-exempt: owns one Codex process per turn for the whole life of a run, and the
+// sequencing of spawn -> watch -> conclude -> maybe-resume is the transport's core invariant:
+// exactly one process per thread at any moment. A planned decomposition behind an injected
+// effects object was stress-tested and judged scope creep for a style change; it is a
+// separately reviewed follow-up, not a drive-by.
 async function supervise(runId: string): Promise<number> {
   ensureJobsDir();
   const loaded = loadRun(runId);

@@ -74,6 +74,9 @@ export function readCartographerMapMetadata(mapContent: string): CartographerMap
   return { totalTokens: null };
 }
 
+// max-lines-exempt: 7 lines over, and it assembles the prompt components in the exact order
+// they reach Codex. The pure accounting half is extracted separately in this series; what is
+// left is the ordered assembly itself.
 export async function buildPromptContext(options: BuildPromptContextOptions): Promise<BuiltPromptContext> {
   const taskComponent = buildComponent("task_prompt", "Task prompt", options.taskPrompt);
   const components: PromptContextComponent[] = [];

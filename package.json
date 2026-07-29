@@ -13,6 +13,7 @@
   "name": "codex-agent",
   "scripts": {
     "build": "bun build src/cli.ts --outdir dist --target node",
+    "check:conventions": "bun src/check-conventions/index.ts",
     "check:tests": "bun src/check-test-discipline/index.ts",
     "format": "biome check --write . && prettier --write .",
     "format:check": "biome check . && prettier --check .",

@@ -215,6 +215,9 @@ export function resolvePassKind(prompt: string, explicit: PassKind | null): Pass
   return looksLikeVerification(prompt) ? "review" : "plan";
 }
 
+// max-lines-exempt: the rule sequence is load-bearing and is being extracted in this series.
+// Rule order decides WHICH refusal a caller sees when an invocation breaks two rules at once,
+// and the required-bound check must stay first. Decomposed in a later commit on this branch.
 export function evaluateContract(input: ContractInput): ContractDecision {
   const passKind = resolvePassKind(input.prompt, input.passKind);
   const profile = PASS_PROFILES[passKind];
