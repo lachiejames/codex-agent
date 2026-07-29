@@ -23,8 +23,8 @@
 // the same answer on both kinds of filesystem, returns the name that is actually on disk,
 // and is the only version that can notice several case variants existing at once.
 
-import { readdirSync, readFileSync, realpathSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 export interface CodebaseMapFile {
   /** The real path, as it exists on disk — never a casing that was merely asked for. */

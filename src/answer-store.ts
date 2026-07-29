@@ -12,8 +12,8 @@
 // is written to `<runId>.answer.md` when the supervisor concludes a turn, and
 // `codex-agent report` reads that file. Nothing parses it back out of the event stream.
 
-import { appendFileSync, readFileSync } from "fs";
-import { resolve, sep } from "path";
+import { appendFileSync, readFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { config } from "./config.ts";
 
 const JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
