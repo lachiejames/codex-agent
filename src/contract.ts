@@ -215,100 +215,134 @@ export function resolvePassKind(prompt: string, explicit: PassKind | null): Pass
   return looksLikeVerification(prompt) ? "review" : "plan";
 }
 
-// max-lines-exempt: the rule sequence is load-bearing and is being extracted in this series.
-// Rule order decides WHICH refusal a caller sees when an invocation breaks two rules at once,
-// and the required-bound check must stay first. Decomposed in a later commit on this branch.
+/**
+ * Rule 0 — ratchet the bypass. Only called when the bypass is actually load-bearing.
+ *
+ * A generic escape hatch weakens more than the rule it opens, unless its semantics are
+ * narrow and its use is visible afterwards. Two conditions, both cheap:
+ *
+ *   * The pass must be named explicitly. Bypassing an *inferred* pass means neither the
+ *     caller nor the tool knows which lane was opened.
+ *   * The subject must actually be present in the invocation. "Unscoped" means the scope
+ *     is not a diff on stdin — it never meant there is no subject.
+ *
+ * This deliberately keeps SKILL.md's P3 stress-test working: `--pass adversarial` is
+ * explicit and the plan is pasted into --property, so both conditions hold.
+ *
+ * @returns the violation, or null when the bypass is honoured
+ */
+function checkBypassRatchet(input: ContractInput, passKind: PassKind): ContractViolation | null {
+  const reasons: string[] = [];
+  if (input.passKind === null) {
+    reasons.push("the pass was inferred rather than named — add --pass " + passKind + " to say which lane you mean");
+  }
+  if (input.prompt.trim().length < MIN_INLINE_SUBJECT_CHARS) {
+    reasons.push(
+      `the subject is only ${input.prompt.trim().length} characters, under the ` +
+        `${MIN_INLINE_SUBJECT_CHARS}-character floor — supply the material inline ` +
+        "(a plan, a spec, the text under attack) or pipe a diff instead",
+    );
+  }
+
+  if (reasons.length === 0) return null;
+
+  return {
+    code: "unratcheted_bypass",
+    message: "--allow-unscoped is not honoured here: " + reasons.join("; and ") + ".",
+    remedy:
+      '--allow-unscoped means "the scope is not a diff", not "there is no scope". Its one\n' +
+      "  documented use is the P3 stress-test, where the plan under attack is supplied inline:\n" +
+      "    codex-agent start --pass adversarial --allow-unscoped \\\n" +
+      '      --property "This plan survives contact with production: <the whole plan>"\n' +
+      "  Otherwise pipe the diff:\n" +
+      '    git diff origin/main...HEAD -- path | codex-agent start "..." --pass ' +
+      passKind +
+      "\n  Every honoured bypass is recorded and shows up in `codex-agent ledger`.",
+  };
+}
+
+/**
+ * Rule 1 — refuse an unscoped verification.
+ *
+ * This single rule deletes the 114 whole-file reads. Without a diff the agent
+ * reconstructed context with 50 `nl -ba` and 64 `sed -n` calls over 9,564 lines of
+ * whole files, when the diff itself was 5,705 lines. Whole files also fail to
+ * localise the reasoning, so it never knew when it was done.
+ *
+ * @returns the violation, or null when the pass is scoped or the bypass was requested
+ */
+function checkScopeRule(
+  input: ContractInput,
+  profile: PassProfile,
+  passKind: PassKind,
+  hasScope: boolean,
+): ContractViolation | null {
+  if (!profile.requiresScope || hasScope || input.allowUnscoped) return null;
+
+  return {
+    code: "unscoped_verification",
+    message:
+      `This is a ${passKind} pass and nothing was supplied on stdin. ` +
+      `Refusing to run: an unscoped verification has no stopping condition.`,
+    remedy:
+      "Pipe the diff:\n" +
+      '  git diff origin/main...HEAD -- path/a path/b | codex-agent start "..." --pass ' +
+      passKind +
+      "\n" +
+      "If the scope genuinely is the whole tree, pass --allow-unscoped to say so explicitly.",
+  };
+}
+
+/**
+ * Rule 2 — breadth guard.
+ *
+ * @returns the violation, or null when the prompt enumerates no more checks than the pass allows
+ */
+function checkBreadthGuard(input: ContractInput, profile: PassProfile, passKind: PassKind): ContractViolation | null {
+  const maxChecks = input.maxChecks ?? profile.maxChecks;
+  const checkCount = countEnumeratedChecks(input.prompt);
+  if (!Number.isFinite(maxChecks) || checkCount <= maxChecks) return null;
+
+  return {
+    code: "excessive_breadth",
+    message:
+      `Prompt enumerates ${checkCount} independent checks; the limit for a ${passKind} ` +
+      `pass is ${maxChecks}. Refusing to run.`,
+    remedy:
+      "Fan out instead — one property per call, run in parallel:\n" +
+      '  for prop in ...; do git diff ... | codex-agent start "PROPERTY: $prop" --pass ' +
+      passKind +
+      "; done\n" +
+      "N properties in one call have no joint stopping condition. That is the shape " +
+      "that ran 1h50m without a verdict.\n" +
+      "Raise the limit with --max-checks N if you are certain.",
+  };
+}
+
+/**
+ * Apply every contract rule to one invocation.
+ *
+ * THE ORDER OF THIS ARRAY IS THE CONTRACT. When an invocation breaks two rules at once, the
+ * caller sees them in this order, and the first is the one they will act on. Rule 0 comes first
+ * because an unhonoured bypass explains why the scope rule is about to fire; reporting the
+ * missing diff first would name the symptom and hide the cause.
+ *
+ * @param input the invocation to judge
+ * @returns the decision: the resolved pass, its profile, every violation, and any honoured bypass
+ */
 export function evaluateContract(input: ContractInput): ContractDecision {
   const passKind = resolvePassKind(input.prompt, input.passKind);
   const profile = PASS_PROFILES[passKind];
-  const violations: ContractViolation[] = [];
 
   const hasScope = Boolean(input.scopeText && input.scopeText.trim().length > 0);
   // The bypass only does work when the scope rule would otherwise have refused this call.
   const bypassIsLoadBearing = profile.requiresScope && !hasScope && Boolean(input.allowUnscoped);
 
-  // Rule 0 — ratchet the bypass.
-  //
-  // A generic escape hatch weakens more than the rule it opens, unless its semantics are
-  // narrow and its use is visible afterwards. Two conditions, both cheap:
-  //
-  //   * The pass must be named explicitly. Bypassing an *inferred* pass means neither the
-  //     caller nor the tool knows which lane was opened.
-  //   * The subject must actually be present in the invocation. "Unscoped" means the scope
-  //     is not a diff on stdin — it never meant there is no subject.
-  //
-  // This deliberately keeps SKILL.md's P3 stress-test working: `--pass adversarial` is
-  // explicit and the plan is pasted into --property, so both conditions hold.
-  if (bypassIsLoadBearing) {
-    const reasons: string[] = [];
-    if (input.passKind === null) {
-      reasons.push("the pass was inferred rather than named — add --pass " + passKind + " to say which lane you mean");
-    }
-    if (input.prompt.trim().length < MIN_INLINE_SUBJECT_CHARS) {
-      reasons.push(
-        `the subject is only ${input.prompt.trim().length} characters, under the ` +
-          `${MIN_INLINE_SUBJECT_CHARS}-character floor — supply the material inline ` +
-          "(a plan, a spec, the text under attack) or pipe a diff instead",
-      );
-    }
-
-    if (reasons.length > 0) {
-      violations.push({
-        code: "unratcheted_bypass",
-        message: "--allow-unscoped is not honoured here: " + reasons.join("; and ") + ".",
-        remedy:
-          '--allow-unscoped means "the scope is not a diff", not "there is no scope". Its one\n' +
-          "  documented use is the P3 stress-test, where the plan under attack is supplied inline:\n" +
-          "    codex-agent start --pass adversarial --allow-unscoped \\\n" +
-          '      --property "This plan survives contact with production: <the whole plan>"\n' +
-          "  Otherwise pipe the diff:\n" +
-          '    git diff origin/main...HEAD -- path | codex-agent start "..." --pass ' +
-          passKind +
-          "\n  Every honoured bypass is recorded and shows up in `codex-agent ledger`.",
-      });
-    }
-  }
-
-  // Rule 1 — refuse an unscoped verification.
-  //
-  // This single rule deletes the 114 whole-file reads. Without a diff the agent
-  // reconstructed context with 50 `nl -ba` and 64 `sed -n` calls over 9,564 lines of
-  // whole files, when the diff itself was 5,705 lines. Whole files also fail to
-  // localise the reasoning, so it never knew when it was done.
-  if (profile.requiresScope && !hasScope && !input.allowUnscoped) {
-    violations.push({
-      code: "unscoped_verification",
-      message:
-        `This is a ${passKind} pass and nothing was supplied on stdin. ` +
-        `Refusing to run: an unscoped verification has no stopping condition.`,
-      remedy:
-        "Pipe the diff:\n" +
-        '  git diff origin/main...HEAD -- path/a path/b | codex-agent start "..." --pass ' +
-        passKind +
-        "\n" +
-        "If the scope genuinely is the whole tree, pass --allow-unscoped to say so explicitly.",
-    });
-  }
-
-  // Rule 2 — breadth guard.
-  const maxChecks = input.maxChecks ?? profile.maxChecks;
-  const checkCount = countEnumeratedChecks(input.prompt);
-  if (Number.isFinite(maxChecks) && checkCount > maxChecks) {
-    violations.push({
-      code: "excessive_breadth",
-      message:
-        `Prompt enumerates ${checkCount} independent checks; the limit for a ${passKind} ` +
-        `pass is ${maxChecks}. Refusing to run.`,
-      remedy:
-        "Fan out instead — one property per call, run in parallel:\n" +
-        '  for prop in ...; do git diff ... | codex-agent start "PROPERTY: $prop" --pass ' +
-        passKind +
-        "; done\n" +
-        "N properties in one call have no joint stopping condition. That is the shape " +
-        "that ran 1h50m without a verdict.\n" +
-        "Raise the limit with --max-checks N if you are certain.",
-    });
-  }
+  const violations = [
+    bypassIsLoadBearing ? checkBypassRatchet(input, passKind) : null,
+    checkScopeRule(input, profile, passKind, hasScope),
+    checkBreadthGuard(input, profile, passKind),
+  ].filter((violation): violation is ContractViolation => violation !== null);
 
   return {
     bypass: bypassIsLoadBearing ? "unscoped" : null,
