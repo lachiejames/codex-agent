@@ -49,69 +49,6 @@ detect_platform() {
 }
 
 # -------------------------------------------------------------------
-# Detect package manager (Linux only)
-# -------------------------------------------------------------------
-detect_linux_pkg_manager() {
-  if command -v apt-get &>/dev/null; then
-    PKG_MANAGER="apt"
-  elif command -v dnf &>/dev/null; then
-    PKG_MANAGER="dnf"
-  elif command -v yum &>/dev/null; then
-    PKG_MANAGER="yum"
-  elif command -v pacman &>/dev/null; then
-    PKG_MANAGER="pacman"
-  elif command -v apk &>/dev/null; then
-    PKG_MANAGER="apk"
-  elif command -v zypper &>/dev/null; then
-    PKG_MANAGER="zypper"
-  else
-    PKG_MANAGER=""
-  fi
-}
-
-# -------------------------------------------------------------------
-# Check and install tmux
-# -------------------------------------------------------------------
-check_tmux() {
-  if command -v tmux &>/dev/null; then
-    success "tmux: $(tmux -V)"
-    return 0
-  fi
-
-  warn "tmux not found. Installing..."
-
-  if [ "$PLATFORM" = "macos" ]; then
-    if ! command -v brew &>/dev/null; then
-      error "Homebrew not found. Install it from https://brew.sh then re-run this script."
-      exit 1
-    fi
-    brew install tmux
-  elif [ "$PLATFORM" = "linux" ]; then
-    detect_linux_pkg_manager
-    case "$PKG_MANAGER" in
-      apt)     sudo apt-get update && sudo apt-get install -y tmux ;;
-      dnf)     sudo dnf install -y tmux ;;
-      yum)     sudo yum install -y tmux ;;
-      pacman)  sudo pacman -S --noconfirm tmux ;;
-      apk)     sudo apk add tmux ;;
-      zypper)  sudo zypper install -y tmux ;;
-      *)
-        error "No supported package manager found. Install tmux manually:"
-        echo "  https://github.com/tmux/tmux/wiki/Installing"
-        exit 1
-        ;;
-    esac
-  fi
-
-  if command -v tmux &>/dev/null; then
-    success "tmux installed: $(tmux -V)"
-  else
-    error "tmux installation failed."
-    exit 1
-  fi
-}
-
-# -------------------------------------------------------------------
 # Check and install Bun
 # -------------------------------------------------------------------
 check_bun() {
@@ -287,14 +224,13 @@ verify() {
 main() {
   echo ""
   echo "========================================="
-  echo "  Codex Orchestrator - Setup"
+  echo "  codex-agent - Setup"
   echo "========================================="
   echo ""
 
   detect_platform
   echo ""
 
-  check_tmux
   check_bun
   check_codex
 

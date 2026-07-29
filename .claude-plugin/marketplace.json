@@ -1,7 +1,7 @@
 {
   "description": "Delegate scoped, bounded tasks to OpenAI Codex agents under an enforced invocation contract. Hard fork of Bootoshi/codex-orchestrator.",
   "metadata": {
-    "description": "Delegate scoped, bounded tasks to OpenAI Codex agents via tmux sessions. Hard fork of Bootoshi/codex-orchestrator with an enforced invocation contract.",
+    "description": "Run OpenAI Codex as a read-only planning and review brain, supervised and bounded, while Claude does all the writing. Hard fork of Bootoshi/codex-orchestrator with an enforced invocation contract.",
     "version": "2.0.0"
   },
   "name": "codex-agent-marketplace",
