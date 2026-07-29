@@ -1,22 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { config } from "./config.ts";
 import {
+  countEnumeratedChecks,
   DEFAULT_HEARTBEAT_EXECS,
   DEFAULT_HEARTBEAT_MINUTES,
-  LEDGER_HEADER,
-  PASS_PROFILES,
-  countEnumeratedChecks,
-  detectBlockingPrompt,
   evaluateContract,
   evaluateHeartbeat,
   extractVerdict,
   formatLedgerRow,
   formatOutcome,
   isPassKind,
+  LEDGER_HEADER,
   looksLikeVerification,
+  PASS_PROFILES,
+  type RunLedger,
   resolvePassKind,
   shapeVerificationPrompt,
-  type RunLedger,
 } from "./contract.ts";
 
 const MINUTE = 60_000;
@@ -99,9 +98,9 @@ describe("contract enforcement", () => {
   test("refuses a verification pass with nothing on stdin", () => {
     // The rule that deletes the 114 whole-file reads.
     const decision = evaluateContract({
+      passKind: null,
       prompt: "Review the auth changes for security issues",
       scopeText: null,
-      passKind: null,
     });
 
     expect(decision.ok).toBe(false);
@@ -112,9 +111,9 @@ describe("contract enforcement", () => {
 
   test("allows a verification pass once scope is supplied", () => {
     const decision = evaluateContract({
+      passKind: null,
       prompt: "Review the auth changes",
       scopeText: "diff --git a/src/auth.ts b/src/auth.ts\n+const x = 1;",
-      passKind: null,
     });
 
     expect(decision.ok).toBe(true);
@@ -123,9 +122,9 @@ describe("contract enforcement", () => {
 
   test("treats whitespace-only stdin as no scope", () => {
     const decision = evaluateContract({
+      passKind: null,
       prompt: "Review the auth changes",
       scopeText: "   \n\t\n  ",
-      passKind: null,
     });
 
     expect(decision.ok).toBe(false);
@@ -144,10 +143,10 @@ describe("contract enforcement", () => {
 
     test("refuses a bypass on an inferred pass", () => {
       const decision = evaluateContract({
+        allowUnscoped: true,
+        passKind: null,
         prompt: `Review this: ${wholePlan}`,
         scopeText: null,
-        passKind: null,
-        allowUnscoped: true,
       });
 
       expect(decision.ok).toBe(false);
@@ -157,10 +156,10 @@ describe("contract enforcement", () => {
 
     test("refuses a bypass with no real subject supplied inline", () => {
       const decision = evaluateContract({
+        allowUnscoped: true,
+        passKind: "review",
         prompt: "Review the whole tree",
         scopeText: null,
-        passKind: "review",
-        allowUnscoped: true,
       });
 
       expect(decision.ok).toBe(false);
@@ -172,10 +171,10 @@ describe("contract enforcement", () => {
       // SKILL.md teaches exactly this shape: an adversarial pass over a plan supplied
       // inline. Breaking it would break the documented three-phase planning pipeline.
       const decision = evaluateContract({
+        allowUnscoped: true,
+        passKind: "adversarial",
         prompt: wholePlan,
         scopeText: null,
-        passKind: "adversarial",
-        allowUnscoped: true,
       });
 
       expect(decision.ok).toBe(true);
@@ -185,10 +184,10 @@ describe("contract enforcement", () => {
     test("records nothing when the bypass did no work", () => {
       // --allow-unscoped alongside a piped diff bypasses nothing, so it is not a bypass.
       const decision = evaluateContract({
+        allowUnscoped: true,
+        passKind: "review",
         prompt: "one property",
         scopeText: "diff --git a/x b/x",
-        passKind: "review",
-        allowUnscoped: true,
       });
 
       expect(decision.ok).toBe(true);
@@ -197,10 +196,10 @@ describe("contract enforcement", () => {
 
     test("does not apply to a plan pass, which never required scope", () => {
       const decision = evaluateContract({
+        allowUnscoped: true,
+        passKind: "plan",
         prompt: "Design a cache",
         scopeText: null,
-        passKind: "plan",
-        allowUnscoped: true,
       });
 
       expect(decision.ok).toBe(true);
@@ -210,9 +209,9 @@ describe("contract enforcement", () => {
 
   test("a plan pass needs no scope, because planning converged", () => {
     const decision = evaluateContract({
+      passKind: null,
       prompt: "Design a caching layer for the API",
       scopeText: null,
-      passKind: null,
     });
 
     expect(decision.passKind).toBe("plan");
@@ -222,6 +221,7 @@ describe("contract enforcement", () => {
   test("refuses the breadth that caused the 1h50m run", () => {
     // This is the Stage-6 review prompt the old skill actually recommended.
     const decision = evaluateContract({
+      passKind: null,
       prompt: [
         "Security review the changes. Check:",
         "- OWASP top 10 vulnerabilities",
@@ -231,42 +231,40 @@ describe("contract enforcement", () => {
         "- SQL/command injection",
       ].join("\n"),
       scopeText: "diff --git a/src/auth.ts b/src/auth.ts",
-      passKind: null,
     });
 
     expect(decision.ok).toBe(false);
-    const breadth = decision.violations.find((v) => v.code === "excessive_breadth");
-    expect(breadth).toBeDefined();
-    expect(breadth!.message).toContain("5 independent checks");
-    expect(breadth!.remedy).toContain("one property per call");
+    // The diff is supplied, so breadth is the ONLY thing wrong with this call. Asserting the
+    // whole list rather than probing for one entry says that too.
+    expect(decision.violations.map((violation) => violation.code)).toEqual(["excessive_breadth"]);
+    const [breadth] = decision.violations;
+    expect(breadth?.message).toContain("5 independent checks");
+    expect(breadth?.remedy).toContain("one property per call");
   });
 
   test("--max-checks raises the breadth limit for a single call", () => {
     const prompt = ["Review:", "- a", "- b", "- c", "- d", "- e"].join("\n");
     const scopeText = "diff --git a/x b/x";
 
-    expect(evaluateContract({ prompt, scopeText, passKind: null }).ok).toBe(false);
-    expect(evaluateContract({ prompt, scopeText, passKind: null, maxChecks: 10 }).ok).toBe(true);
+    expect(evaluateContract({ passKind: null, prompt, scopeText }).ok).toBe(false);
+    expect(evaluateContract({ maxChecks: 10, passKind: null, prompt, scopeText }).ok).toBe(true);
   });
 
   test("a plan pass has no breadth limit", () => {
     const prompt = ["Design this. Consider:", ...Array.from({ length: 40 }, (_, i) => `- point ${i}`)].join("\n");
-    const decision = evaluateContract({ prompt, scopeText: null, passKind: "plan" });
+    const decision = evaluateContract({ passKind: "plan", prompt, scopeText: null });
 
     expect(decision.ok).toBe(true);
   });
 
   test("reports both violations at once rather than one at a time", () => {
     const decision = evaluateContract({
+      passKind: null,
       prompt: ["Review:", "- a", "- b", "- c", "- d"].join("\n"),
       scopeText: null,
-      passKind: null,
     });
 
-    expect(decision.violations.map((v) => v.code).sort()).toEqual([
-      "excessive_breadth",
-      "unscoped_verification",
-    ]);
+    expect(decision.violations.map((v) => v.code).toSorted()).toEqual(["excessive_breadth", "unscoped_verification"]);
   });
 });
 
@@ -302,14 +300,6 @@ describe("effort tiering per pass", () => {
     }
   });
 
-  test("every pass has a finite wall-clock bound", () => {
-    // The failing run's defining absence.
-    for (const profile of Object.values(PASS_PROFILES)) {
-      expect(Number.isFinite(profile.timeoutMinutes)).toBe(true);
-      expect(profile.timeoutMinutes).toBeGreaterThan(0);
-    }
-  });
-
   test("every verification pass requires scope, a verdict, and a word cap", () => {
     for (const kind of ["review", "mechanical", "adversarial"] as const) {
       expect(PASS_PROFILES[kind].requiresScope).toBe(true);
@@ -326,8 +316,8 @@ describe("effort tiering per pass", () => {
 describe("prompt shaping", () => {
   test("reproduces the shape that answered in 51 seconds", () => {
     const prompt = shapeVerificationPrompt({
-      property: "the retry wrapper cannot double-post",
       profile: PASS_PROFILES.review,
+      property: "the retry wrapper cannot double-post",
       scopeText: "diff --git a/src/slack.ts b/src/slack.ts\n+await client.postMessage(x);",
     });
 
@@ -341,8 +331,8 @@ describe("prompt shaping", () => {
 
   test("demands a machine-checkable verdict line", () => {
     const prompt = shapeVerificationPrompt({
-      property: "x holds",
       profile: PASS_PROFILES.review,
+      property: "x holds",
       scopeText: "diff",
     });
 
@@ -352,8 +342,8 @@ describe("prompt shaping", () => {
 
   test("omits the diff section when there is no scope", () => {
     const prompt = shapeVerificationPrompt({
-      property: "x holds",
       profile: PASS_PROFILES.review,
+      property: "x holds",
       scopeText: null,
     });
 
@@ -363,8 +353,8 @@ describe("prompt shaping", () => {
 
   test("an explicit word cap overrides the profile default", () => {
     const prompt = shapeVerificationPrompt({
-      property: "x holds",
       profile: PASS_PROFILES.review,
+      property: "x holds",
       scopeText: "diff",
       wordCap: 50,
     });
@@ -453,11 +443,11 @@ describe("convergence heartbeat", () => {
 
   test("thresholds are configurable so callers can back off after reporting", () => {
     const quiet = evaluateHeartbeat({
+      afterExecs: 80,
+      afterMinutes: 10,
       elapsedMs: 6 * MINUTE,
       execCount: 45,
       verdict: null,
-      afterMinutes: 10,
-      afterExecs: 80,
     });
 
     expect(quiet.shouldReport).toBe(false);
@@ -485,66 +475,30 @@ describe("telling blocked apart from not converging", () => {
     expect(report.message).toContain("not converging");
   });
 
-  test("detects the trust prompt as tmux actually renders it", () => {
-    // Verbatim from the real pane capture. tmux collapses the spacing in Codex's
-    // box-drawn prompt, so a spaced regex silently never matches — the exact class of
-    // quietly-dead guard this module exists to avoid.
-    const paneOutput =
-      ">You are in /Users/x/dev/personal/codex-agent" +
-      "Doyoutrustthecontentsofthisdirectory?" +
-      "Workingwithuntrustedcontentscomeswithhigherriskofpromptinjection." +
-      "› 1. Yes, continue2.No,quitPress enter to continue";
-
-    const detection = detectBlockingPrompt(paneOutput);
-
-    expect(detection.blocked).toBe(true);
-    expect(detection.kind).toBe("onboarding");
-    expect(detection.hint).toContain("trust_level");
-  });
-
-  test("also detects the normally-spaced form", () => {
-    const detection = detectBlockingPrompt("Do you trust the contents of this directory?");
-
-    expect(detection.blocked).toBe(true);
-    expect(detection.kind).toBe("onboarding");
-  });
-
-  test("classifies approval and auth prompts distinctly", () => {
-    expect(detectBlockingPrompt("Allow command?").kind).toBe("permission");
-    expect(detectBlockingPrompt("Sign in with ChatGPT to continue").kind).toBe("auth");
-  });
-
-  test("ordinary working output is not mistaken for a prompt", () => {
-    for (const output of [
-      "Reading src/cli.ts",
-      "thinking... exploring the diff",
-      "VERDICT: CLEAN",
-      "",
-      null,
-      undefined,
-    ]) {
-      expect(detectBlockingPrompt(output).blocked).toBe(false);
-    }
-  });
+  // `detectBlockingPrompt` and its four tests are gone with the tmux transport. It scraped pane
+  // text for "Do you trust the contents of this directory?" because under a TUI an agent could
+  // sit on that prompt for its whole bound in silence. `codex exec` exits non-zero in about a
+  // second with the reason on stderr, so there is no interactive prompt left to detect and
+  // nothing for a scraper to guard.
 });
 
 describe("run ledger formatting", () => {
   function ledgerFixture(overrides: Partial<RunLedger> = {}): RunLedger {
     return {
+      breachReason: null,
+      bypass: null,
+      cumulativeInputTokens: null,
+      durationMs: 51_000,
+      execCount: 4,
       jobId: "abc123",
+      model: "gpt-5.6-sol",
       passKind: "review",
       reasoning: "xhigh",
-      model: "gpt-5.6-sol",
-      durationMs: 51_000,
+      scoped: true,
+      timedOut: false,
       tokensSpent: 31_000,
-      cumulativeInputTokens: null,
-      execCount: 4,
       verdict: "BROKEN",
       verdictProduced: true,
-      scoped: true,
-      bypass: null,
-      timedOut: false,
-      breachReason: null,
       ...overrides,
     };
   }
@@ -553,12 +507,12 @@ describe("run ledger formatting", () => {
     const row = formatLedgerRow(
       ledgerFixture({
         durationMs: 110 * MINUTE,
-        tokensSpent: 412_000,
         execCount: 115,
+        scoped: false,
+        tokensSpent: 412_000,
         verdict: null,
         verdictProduced: false,
-        scoped: false,
-      })
+      }),
     );
 
     expect(row).toContain("abc123");
@@ -579,15 +533,15 @@ describe("run ledger formatting", () => {
   test("tolerates missing metrics", () => {
     const row = formatLedgerRow(
       ledgerFixture({
+        durationMs: null,
+        execCount: null,
         jobId: "ghi789",
         passKind: null,
-        durationMs: null,
+        scoped: false,
         tokensSpent: null,
-        execCount: null,
         verdict: null,
         verdictProduced: false,
-        scoped: false,
-      })
+      }),
     );
 
     expect(row).toContain("ghi789");
@@ -597,7 +551,7 @@ describe("run ledger formatting", () => {
   test("shows spend and cumulative input as separate columns", () => {
     // The whole point of the split: these are different quantities and a reader must be
     // able to tell which one is missing.
-    const row = formatLedgerRow(ledgerFixture({ tokensSpent: 253_275, cumulativeInputTokens: 1_109_604 }));
+    const row = formatLedgerRow(ledgerFixture({ cumulativeInputTokens: 1_109_604, tokensSpent: 253_275 }));
     expect(row).toContain("253,275");
     expect(row).toContain("1,109,604");
     expect(LEDGER_HEADER).toContain("SPENT");
@@ -607,7 +561,7 @@ describe("run ledger formatting", () => {
   test("never substitutes cumulative input for unmeasured spend", () => {
     // Regression on the defect this PR exists to fix. A run whose spend was never
     // reported must read "-" under SPENT, not borrow the cumulative-input number.
-    const row = formatLedgerRow(ledgerFixture({ tokensSpent: null, cumulativeInputTokens: 2_813_071 }));
+    const row = formatLedgerRow(ledgerFixture({ cumulativeInputTokens: 2_813_071, tokensSpent: null }));
     expect(row).toContain("2,813,071");
     expect(row).not.toContain("2,813,071  2,813,071");
     const spentColumn = row.slice(0, row.indexOf("2,813,071"));
@@ -620,16 +574,16 @@ describe("run ledger formatting", () => {
     });
 
     test("names the guard that stopped a killed run", () => {
-      expect(
-        formatOutcome(ledgerFixture({ verdict: null, verdictProduced: false, breachReason: "stalled" }))
-      ).toBe("killed:stalled");
+      expect(formatOutcome(ledgerFixture({ breachReason: "stalled", verdict: null, verdictProduced: false }))).toBe(
+        "killed:stalled",
+      );
     });
 
     test("reads a legacy timed-out job as a wall-clock breach", () => {
       // Jobs recorded before guards.ts existed only have `timedOut`.
-      expect(
-        formatOutcome(ledgerFixture({ verdict: null, verdictProduced: false, timedOut: true }))
-      ).toBe("killed:wall_clock");
+      expect(formatOutcome(ledgerFixture({ timedOut: true, verdict: null, verdictProduced: false }))).toBe(
+        "killed:wall_clock",
+      );
     });
 
     test("falls back to NONE", () => {

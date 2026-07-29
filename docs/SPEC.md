@@ -58,7 +58,7 @@ There is deliberately **no token ceiling**. Measured over 87 runs: the plan judg
 excellent cost 13.7M tokens; the plan judged a catastrophe cost 2.8M. No ceiling separates
 them.
 
-There is deliberately **no zero-exec fail-fast**. `execCount: 0` is the *healthy* signature
+There is deliberately **no zero-exec fail-fast**. `execCount: 0` is the _healthy_ signature
 of a scoped pass, because the shaped prompt tells the agent not to read other files.
 
 ### 4. Every invocation carries an explicit timeout. There are no defaults.
@@ -86,7 +86,7 @@ attacking five different properties of one PR. Each is a separate job, a separat
 separate process, with its own event stream, its own bound and its own exit code. Nothing is
 shared between them.
 
-This is the *intended* shape of a review, not an edge case. The contract's breadth guard
+This is the _intended_ shape of a review, not an edge case. The contract's breadth guard
 exists specifically to push callers into it.
 
 ### 6. Claude supervises. A running pass is visible and steerable.
@@ -147,12 +147,12 @@ A verdict that exists only in a live process is not a verdict.
 
 ### 10. Exit codes are load-bearing.
 
-| Code | Meaning |
-|------|---------|
-| 0 | usable result |
-| 1 | operational failure (bad arguments, job not found) |
-| 3 | **contract refusal** — fix the invocation, then retry |
-| 4 | **the run is not a usable result** — a verification pass with no verdict, or a run a guard stopped |
+| Code | Meaning                                                                                            |
+| ---- | -------------------------------------------------------------------------------------------------- |
+| 0    | usable result                                                                                      |
+| 1    | operational failure (bad arguments, job not found)                                                 |
+| 3    | **contract refusal** — fix the invocation, then retry                                              |
+| 4    | **the run is not a usable result** — a verification pass with no verdict, or a run a guard stopped |
 
 A verification pass that never concluded must not look like a success to a caller checking
 exit status.

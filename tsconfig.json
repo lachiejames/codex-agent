@@ -14,8 +14,8 @@
   // `types` additionally includes "bun" (slopweaver has only "node") because this codebase uses
   // `bun:test`, the `Bun` global and `import.meta.dir`.
   "compilerOptions": {
-    "allowJs": false,
     "allowImportingTsExtensions": true,
+    "allowJs": false,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
     "declaration": false,

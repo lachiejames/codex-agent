@@ -11,15 +11,15 @@
 // rather than from a terminal that may no longer exist: what was asked, what came back,
 // and why it was judged the way it was.
 
+import type { StoredAnswer } from "./answer-store.ts";
 import {
-  LEDGER_HEADER,
+  type BreachReason,
   formatLedgerRow,
   formatOutcome,
-  type BreachReason,
+  LEDGER_HEADER,
   type PassKind,
   type RunLedger,
 } from "./contract.ts";
-import type { StoredAnswer } from "./answer-store.ts";
 
 export interface JudgementInput {
   passKind: PassKind | null;
@@ -43,73 +43,68 @@ export interface Judgement {
 /**
  * Decide how a finished run should be read.
  *
- * Pure and table-tested, because this is the judgement a caller acts on. The ordering
- * matters: a breach explains itself better than a missing verdict does, and "blocked on a
- * human" must never be reported as "did not converge".
+ * Pure and table-tested, because this is the judgement a caller acts on. The ordering still
+ * matters, for one remaining reason: a breach explains itself better than a missing verdict
+ * does. A run killed at its bound has no verdict *because* it was killed, so reporting the
+ * missing verdict first would name the symptom and hide the cause — and the two remedies point
+ * opposite ways, one at the question's breadth and one at the transport.
  */
 export function judgeRun(input: JudgementInput): Judgement {
-  if (input.breachReason === "blocked") {
-    return {
-      failed: true,
-      summary: "Killed while blocked on an interactive Codex prompt — it never started work.",
-      remedy:
-        "Resolve the prompt (directory trust, approval policy, or login), then re-run. Do not " +
-        "narrow the question: the question was never reached.",
-    };
-  }
-
+  // There is no longer a "blocked" breach. Under the TUI transport an agent could sit forever
+  // on "do you trust this directory?" and burn its whole bound in silence, so a whole guard
+  // existed to detect that from scraped pane text. `codex exec` exits 1 in about a second with
+  // the reason on stderr, which arrives here as an ordinary failure with a real message.
   if (input.breachReason === "wall_clock") {
     return {
       failed: true,
-      summary: "Killed at its wall-clock bound without concluding.",
       remedy:
         "Narrow the question and supply scope on stdin. Raise --timeout only once you know " +
         "the question is answerable in one pass.",
+      summary: "Killed at its wall-clock bound without concluding.",
     };
   }
 
   if (input.breachReason === "stalled") {
     return {
       failed: true,
-      summary:
-        "Killed after every progress signal flat-lined — no log output, no token growth, " +
-        "no completed turn.",
       remedy:
-        "This is a hung session rather than a hard question. Check `codex-agent sessions` " +
-        "and re-run; if it recurs, capture the pane before it dies.",
+        "This is a hung invocation rather than a hard question. Read the last events with " +
+        "`codex-agent tail <id>` and the run's .stderr for what Codex said before it went " +
+        "quiet, then re-run.",
+      summary: "Killed after every progress signal flat-lined — no log output, no token growth, no completed turn.",
     };
   }
 
   if (input.requiresVerdict && !input.verdict) {
     return {
       failed: true,
+      remedy: "Narrow to one falsifiable property and pipe the diff. Do not raise the timeout first.",
       summary:
         "No VERDICT line. A reply without one is a failed run, not a cautious one — the pass " +
         "never reached CLEAN or BROKEN.",
-      remedy: "Narrow to one falsifiable property and pipe the diff. Do not raise the timeout first.",
     };
   }
 
   if (!input.hasAnswer) {
     return {
       failed: true,
+      remedy: "Check `codex-agent tail <id>` and the run's .stderr for a startup failure, then re-run.",
       summary: "No answer was ever persisted — the agent produced nothing to read.",
-      remedy: "Check `codex-agent capture <id> 40 --clean` for a startup failure, then re-run.",
     };
   }
 
   if (input.verdict) {
     return {
       failed: false,
-      summary: `Concluded with VERDICT: ${input.verdict}.`,
       remedy: "",
+      summary: `Concluded with VERDICT: ${input.verdict}.`,
     };
   }
 
   return {
     failed: false,
-    summary: "Produced an answer. This pass requires no verdict, so that is a complete result.",
     remedy: "",
+    summary: "Produced an answer. This pass requires no verdict, so that is a complete result.",
   };
 }
 
@@ -173,7 +168,7 @@ export function formatRunReport(report: RunReport): string {
         "",
         `... (${(report.asked.length - ASKED_PREVIEW_CHARS).toLocaleString()} more characters` +
           (promptPath ? `; full prompt at ${promptPath}` : "") +
-          ")"
+          ")",
       );
     }
   } else {
@@ -186,14 +181,14 @@ export function formatRunReport(report: RunReport): string {
       "(nothing persisted)",
       "",
       "An answer is written the moment Codex completes a turn. Nothing here means the run",
-      "never finished a turn — not that the answer was lost."
+      "never finished a turn — not that the answer was lost.",
     );
   } else {
     if (report.answersTruncated) {
       lines.push(
         "[truncated preview only — this run predates durable answer capture, so just the",
         " first 500 characters were kept. A verdict on the last line is not recoverable.]",
-        ""
+        "",
       );
     }
     report.answers.forEach((answer, index) => {

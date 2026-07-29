@@ -1,0 +1,87 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+
+  // Ported from ~/dev/personal/slopweaver. Biome is the formatter of record for JS/TS/JSON/JSONC
+  // and organizes imports. Prettier only owns the doc formats Biome leaves alone (.md/.yaml/...).
+  // Oxlint owns the bug-catching lint rules; Biome keeps a tiny set of critical ones on top
+  // (everything else is `preset: none`).
+
+  "assist": {
+    "actions": {
+      "preset": "recommended",
+      "source": {
+        "organizeImports": "on",
+        "useSortedKeys": "on",
+        "useSortedProperties": "on"
+      }
+    },
+    "enabled": true,
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/coverage"]
+  },
+
+  "files": {
+    "ignoreUnknown": false,
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/coverage"],
+    "maxSize": 1048576
+  },
+
+  "formatter": {
+    "formatWithErrors": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 120
+  },
+
+  "json": {
+    "formatter": {
+      "expand": "auto",
+      "trailingCommas": "none"
+    },
+    "parser": {
+      "allowComments": true
+    }
+  },
+
+  // LINTING: only critical bug-catching rules; oxlint handles the rest.
+  "linter": {
+    "enabled": true,
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/coverage"],
+    "rules": {
+      "correctness": {
+        // Reassigning a const.
+        "noConstAssign": "error",
+        // Dead imports accumulate during refactors.
+        "noUnusedImports": "error",
+        // A function typed to return void that actually returns a value.
+        "noVoidTypeReturn": "error",
+        // `x === NaN` is always false; use Number.isNaN().
+        "useIsNan": "error"
+      },
+      "performance": {
+        // O(n^2) spread-in-reduce: [...acc, val] — push instead.
+        "noAccumulatingSpread": "error",
+        // ns["foo"] on a namespace import breaks tree-shaking.
+        "noDynamicNamespaceImportAccess": "warn"
+      },
+      "preset": "none",
+      "suspicious": {
+        // debugger statements shipping to production.
+        "noDebugger": "error",
+        // `let a;` whose type evolves through reassignment (implicit any).
+        "noEvolvingTypes": "error",
+        // `let a;` with no annotation (implicit any).
+        "noImplicitAnyLet": "error"
+      }
+    }
+  },
+
+  "root": true,
+
+  "vcs": {
+    "clientKind": "git",
+    "defaultBranch": "main",
+    "enabled": true,
+    "useIgnoreFile": true
+  }
+}

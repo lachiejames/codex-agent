@@ -7,20 +7,24 @@ with the original's brain/body split reversed.
 ```bash
 # Plan (broad by design — it converges on one artifact)
 # The prompt is a positional; --map and --wait are bare flags that consume nothing.
-codex-agent start --pass plan "Design the retry strategy for the outbound queue" --map --wait
+codex-agent start --pass plan "Design the retry strategy for the outbound queue" \
+  --timeout 45 --map --wait
 
-# Review one property of a diff (bounded; must reach a verdict)
+# Review one property of a diff (scoped; must reach a verdict)
 git diff origin/main...HEAD -- src/queue.ts |
-  codex-agent start --pass review --property "no message is delivered twice" --wait
+  codex-agent start --pass review --property "no message is delivered twice" --timeout 10 --wait
 ```
+
+`--timeout <minutes>` is **required on every launch** and has no default anywhere. Omitting it
+is a contract refusal, exit 3.
 
 ## Codex is the brain. Claude is the body.
 
-|          | Codex                                                                                | Claude                                                   |
-| -------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| Role     | brain                                                                                | body                                                     |
-| Access   | **read-only, always**                                                                | full write                                               |
-| Good at  | planning a hard problem, stress-testing a plan, finding the subtle defect in a diff   | writing code, running tests, committing, driving the loop |
+|         | Codex                                                                               | Claude                                                    |
+| ------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Role    | brain                                                                               | body                                                      |
+| Access  | **read-only, always**                                                               | full write                                                |
+| Good at | planning a hard problem, stress-testing a plan, finding the subtle defect in a diff | writing code, running tests, committing, driving the loop |
 
 Every pass profile is read-only and the default sandbox is `read-only`. Write access is something you opt
 into with an explicit `-s workspace-write`, never something inferred.
@@ -38,11 +42,11 @@ It never looped — it made 115 distinct, methodical calls and never converged, 
 **9,564 lines of whole files** when the diff was 5,705. Scoped to one property with the diff piped in, the
 same question was answered correctly in **51 seconds**.
 
-| run      | scope                  | diff?             | result                  |
-| -------- | ---------------------- | ----------------- | ----------------------- |
-| planning | one plan               | no                | ~25 min, excellent plan |
-| review   | ~25 checks in one call | no                | **1h50m, no verdict**   |
-| narrow   | **one property**       | **yes, stdin**    | **51s, correct finding** |
+| run      | scope                  | diff?          | result                   |
+| -------- | ---------------------- | -------------- | ------------------------ |
+| planning | one plan               | no             | ~25 min, excellent plan  |
+| review   | ~25 checks in one call | no             | **1h50m, no verdict**    |
+| narrow   | **one property**       | **yes, stdin** | **51s, correct finding** |
 
 **Do not lower the reasoning effort to make review terminate.** `xhigh` is what caught a genuinely subtle
 double-post defect — a `postMessage` under both a client's default ten retries _and_ a four-retry wrapper,
@@ -50,29 +54,51 @@ double-post defect — a `postMessage` under both a client's default ten retries
 
 The CLI refuses violations rather than trusting you to remember:
 
-| exit  | meaning                                     |
-| ----- | ------------------------------------------- |
-| **3** | contract refusal — fix the invocation       |
-| **4** | verification pass produced no verdict       |
+| exit  | meaning                                                                             |
+| ----- | ----------------------------------------------------------------------------------- |
+| **3** | contract refusal — fix the invocation                                               |
+| **4** | not a usable result — a verification pass with no verdict, or a run a bound stopped |
 
 1. **Pipe the diff.** A review/verify/audit prompt with nothing on stdin is refused.
 2. **One property per call.** Past 3 enumerated checks a review is refused; fan out instead.
-3. **Every run has a wall-clock bound**, defaulted per pass.
+3. **`--timeout <minutes>` is required**, on every launch, with no default anywhere.
 4. **Answers are word-capped**, which forces a verdict instead of exploration.
 5. **A verdict is mandatory and machine-checked** — `VERDICT: CLEAN` or `VERDICT: BROKEN`.
+6. **Bypasses are ratcheted and recorded.** `--allow-unscoped` needs an explicit `--pass` and the
+   subject inline (≥200 chars); `--no-contract` is recorded too. Both show in the ledger.
+
+## The bound is yours to state, and it warns before it kills
+
+`--timeout` has no default because a default a machine caller inherits silently is not a bound, it is a
+habit. Callers forget defaults exist, and then a 10-minute review of a small diff and a 60-minute deep
+adversarial pass run under the same accidental number. Every per-pass profile timeout and both config
+defaults were deleted.
+
+It bounds **one turn of thinking**, not the life of a conversation.
+
+At **85%** of the bound the supervisor interrupts the agent and resumes it asking for a conclusion with
+what it already has; only then is the bound fatal. Kill-at-bound made every timeout a gamble — too tight
+and a good run is shot seconds from its verdict, too loose and a stray run burns an hour. Verified live: a
+4-minute-bounded run at 18 exec calls was interrupted, resumed, and produced `VERDICT: CLEAN` instead of
+dying with nothing. The warn does not extend the deadline: a 10-minute bound is still 10 minutes.
 
 ## Pass profiles
 
-| pass          | model       | effort | sandbox   | bound | word cap | needs diff | needs verdict |
-| ------------- | ----------- | ------ | --------- | ----- | -------- | ---------- | ------------- |
-| `plan`        | gpt-5.6-sol | xhigh  | read-only | 45m   | none     | no         | no            |
-| `review`      | gpt-5.6-sol | xhigh  | read-only | 10m   | 300      | yes        | yes           |
-| `adversarial` | gpt-5.6-sol | xhigh  | read-only | 20m   | 400      | yes        | yes           |
-| `mechanical`  | gpt-5.6-sol | xhigh  | read-only | 5m    | 200      | yes        | yes           |
+| pass          | model       | effort | sandbox   | word cap | max checks | needs diff | needs verdict |
+| ------------- | ----------- | ------ | --------- | -------- | ---------- | ---------- | ------------- |
+| `plan`        | gpt-5.6-sol | xhigh  | read-only | none     | ∞          | no         | no            |
+| `review`      | gpt-5.6-sol | xhigh  | read-only | 300      | 3          | yes        | yes           |
+| `adversarial` | gpt-5.6-sol | xhigh  | read-only | 400      | 1          | yes        | yes           |
+| `mechanical`  | gpt-5.6-sol | xhigh  | read-only | 200      | 10         | yes        | yes           |
 
-**Every pass runs `gpt-5.6-sol` at `xhigh`.** `buildCodexArgs` passes `-c model=` and
+No profile carries a timeout. That column existed and was deleted, because a bound nobody chose is how the
+tool ended up with one nobody could defend.
+
+**Every pass runs `gpt-5.6-sol` at `xhigh`.** `buildCodexArgv` passes `-c model=` and
 `-c model_reasoning_effort=` explicitly, which _override_ `~/.codex/config.toml` — so this table, not that
-file, is what every launched agent actually runs with. A test asserts it.
+file, is what every launched agent actually runs with. A test asserts it. The sandbox travels the same way,
+as `-c sandbox_mode=`, because `codex exec resume` rejects `--sandbox` outright and dropping the flag there
+would silently give a resumed review pass write access.
 
 ## The two shapes
 
@@ -94,11 +120,13 @@ echo 'export PATH="$HOME/dev/personal/codex-agent/bin:$PATH"' >> ~/.zshrc
 codex-agent health
 ```
 
-Requires `tmux`, [Bun](https://bun.sh), the [Codex CLI](https://github.com/openai/codex), and
-`codex --login`.
+Requires [Bun](https://bun.sh), the [Codex CLI](https://github.com/openai/codex), and `codex --login`.
+**tmux is no longer a dependency** — it was the previous transport.
 
 **Trust the directory.** Codex matches project trust by _exact path_, so trusting a parent does not cover a
-new checkout. Without this, runs block forever on an interactive prompt with zero exec calls:
+new checkout. An untrusted directory now fails in about 4 seconds with `Not inside a trusted directory` on
+the run record; under the old transport the same condition sat on an interactive prompt and burned the
+whole bound in silence.
 
 ```toml
 # ~/.codex/config.toml
@@ -131,72 +159,99 @@ still a second skill Claude has to choose between, and it needs machinery to sta
 
 ```bash
 bash scripts/verify-install.sh --all    # one tree, contract, read-only, skills, a real bounded run
-bash scripts/cleanup-legacy.sh          # dry run; --delete to apply
 codex-agent ledger                      # duration, SPENT, CUM-IN, execs, scoped, bypass, outcome
-codex-agent clean                       # reap job logs + orphaned tmux sessions
+codex-agent clean                       # delete runs older than 7 days, and say how much that freed
 ```
 
 The ledger is what makes non-convergence measurable rather than anecdotal. A healthy scoped review looks
 like _25s / ~22k spent / 0 execs / BROKEN_ — note that **0 execs is health**, not spinning: the shaped
 prompt tells the agent not to read other files. Treat any `NONE` on a verification pass as a failed run.
 
-`SPENT` and `CUM-IN` are two different quantities. `SPENT` is what Codex reported spending; `CUM-IN` is
-cumulative *input* tokens from the session file, which excludes output and re-counts context every turn.
-Either can read `-` when it was not measured. They were one column until they were caught reporting the
-same run as 253k and 1.1M, so never substitute one for the other.
+`SPENT` and `CUM-IN` are two different quantities, both read off `turn.completed.usage` in the event
+stream. `SPENT` is input + output summed across completed turns; `CUM-IN` is cumulative _input_ only, which
+excludes output and re-counts context every turn. Either reads `-` when Codex reported no usage, and `-`
+means not measured, never zero. They were one column until they were caught reporting the same run as 253k
+and 1.1M, so never substitute one for the other.
+
+`clean` **deletes**. The old version moved artifacts to `jobs/.trash/` for recoverability and nothing ever
+emptied it: 699 MB across 964 files, while `clean` reported jobs "cleaned" and freed nothing at all.
+Recoverability nobody expires is a leak with a nicer name, and a week is long enough to have read the
+report.
 
 ## Commands
 
 ```
-codex-agent start "prompt" [options]   Spawn an agent
-codex-agent report <jobId> [--json]    Asked / answered / judged — how to read a result
-codex-agent ledger [--json]            Run ledger
-codex-agent status <jobId> [--json]    Job status
-codex-agent await-turn <jobId>         Block until the agent finishes a turn
-codex-agent send <jobId> "message"     Steer a running agent
-codex-agent capture <jobId> [n]        Recent output (--clean strips TUI noise)
-codex-agent output <jobId>             Raw transcript (debugging Codex, not reading answers)
-codex-agent jobs [--json] [--all]      List jobs
-codex-agent kill <jobId>               Stop a job
-codex-agent clean                      Reap old jobs + orphaned sessions
-codex-agent health                     Check tmux + codex
+codex-agent start "prompt" --timeout <min>   Start a run (--timeout is REQUIRED)
+codex-agent report <runId> [--json]          Asked / answered / judged — how to read a result
+codex-agent ledger [--json] [--all]          Run ledger
+codex-agent status <runId> [--json]          What it is doing right now
+codex-agent await <runId> [--json]           Block until the turn concludes (alias: await-turn)
+codex-agent send <runId> "message"           Interrupt and steer, or resume an idle run
+codex-agent tail <runId> [n]                 Recent raw JSONL events (alias: capture)
+codex-agent runs [--json] [--all]            List runs (alias: jobs)
+codex-agent kill <runId>                     Stop a run and its supervisor
+codex-agent clean                            Delete runs older than 7 days
+codex-agent health                           Check codex
 ```
 
-`report` is the one to reach for. It prints the answer untruncated from a persisted file rather than from
-a tmux pane, so it survives the session — and the tmux server — going away, and it exits **4** when the
-run is not a usable result.
+`attach`, `watch`, `sessions`, `output` and `delete` went with the tmux transport, as did the
+`--strip-ansi`/`--clean` flags — there is no pane left to clean. An unknown subcommand is now an error; it
+used to fall through and be launched as a prompt, so `codex-agent repot abc123` spawned a real Codex run.
 
-| Flag               | Values                                          | Notes                                    |
-| ------------------ | ----------------------------------------------- | ---------------------------------------- |
-| `--pass`           | plan, review, mechanical, adversarial           | Sets effort, sandbox, bound, caps        |
-| `--property`       | string                                          | The single falsifiable claim to attack   |
-| `--timeout`        | minutes                                         | Wall-clock bound                         |
-| `--allow-unscoped` | flag                                            | No stdin, by exception: needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
-| `--max-checks`     | n                                               | Override the enumerated-check limit      |
-| `--word-cap`       | n                                               | Override the answer cap (0 disables)     |
-| `--no-contract`    | flag                                            | Disable enforcement; recorded as a bypass |
-| `-s`, `--sandbox`  | read-only, workspace-write, danger-full-access  | Default `read-only`                      |
-| `-r`, `--reasoning`| low, medium, high, xhigh                        | Overrides the profile                    |
-| `--map`            | flag (takes no value)                           | Include the codebase map; prints the resolved path |
-| `-w`, `--wait`     | flag                                            | Return once answered and reap the session. Bounds apply with or without it |
-| `--dry-run`        | flag                                            | Show the shaped prompt without executing |
+`report` is the one to reach for. The answer comes from the file Codex itself writes via
+`--output-last-message`, so it survives the process being gone, and it exits **4** when the run is not a
+usable result. `tail` is the raw event stream — for watching a run or diagnosing Codex, never for
+retrieving an answer.
+
+| Flag                | Values                                         | Notes                                                                                               |
+| ------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `--timeout`         | minutes                                        | **Required, no default.** Bounds one turn of thinking; omitting it is exit 3                        |
+| `--pass`            | plan, review, mechanical, adversarial          | Sets effort, sandbox, word cap, check limit                                                         |
+| `--property`        | string                                         | The single falsifiable claim to attack                                                              |
+| `--allow-unscoped`  | flag                                           | No stdin, by exception: needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
+| `--max-checks`      | n                                              | Override the enumerated-check limit                                                                 |
+| `--word-cap`        | n                                              | Override the answer cap (0 disables)                                                                |
+| `--no-contract`     | flag                                           | Disable enforcement; recorded as a bypass                                                           |
+| `-s`, `--sandbox`   | read-only, workspace-write, danger-full-access | Default `read-only`                                                                                 |
+| `-r`, `--reasoning` | low, medium, high, xhigh                       | Overrides the profile                                                                               |
+| `-d`, `--dir`       | path                                           | Working directory (default: cwd)                                                                    |
+| `--map`             | flag (takes no value)                          | Include the codebase map; prints the resolved path                                                  |
+| `-w`, `--wait`      | flag                                           | Return once the turn concludes, printing a cost line. The bound applies either way                  |
+| `--dry-run`         | flag                                           | Show the shaped prompt and the decision without executing                                           |
 
 There is no `-f`/`--file` flag — it was removed upstream. **stdin is the scope channel.**
 
 ## How it works
 
-Each job runs `codex` inside its own tmux session, wrapped in `script` so the full transcript is captured to
-`~/.codex-agent/jobs/<id>.log`. A per-job notify hook writes a signal file on turn completion **and persists
-the answer untruncated to `<id>.answer.md`** — a verdict that exists only in a live tmux session is not a
-verdict, and one has already been lost to a dead tmux server. Job state lives in `<id>.json`; metrics are
-read back from the Codex session transcript under `~/.codex/sessions/`, located by working directory, time
-window, and prompt content — Codex 0.145.0 never prints a session id, so the id-based lookup upstream relied
-on always failed silently.
+A **run** is one Codex thread driven by N successive `codex exec --json` processes. A detached supervisor
+process owns it for its whole life:
 
-Bounds live in `src/guards.ts` and are applied by `enforceRunGuards`, which every command that observes a job
-runs. They are not tied to `--wait`; a job past its bound is stopped by whoever next looks at it.
+- `codex exec --json` emits a **typed JSONL event per line** into `<id>.jsonl`, which the supervisor folds
+  incrementally into exec count, token totals, turn counts and a liveness counter. There is no terminal to
+  scrape, so the three modules that existed only to reverse-engineer one — a session-file parser, a
+  `script(1)` log regex, and 187 lines of guessing which terminal glyphs were noise — are all gone.
+- The answer of record is **`--output-last-message`**, the file Codex itself writes. Event-stream items can
+  change shape between versions; that file is Codex's own contract for "this is the final answer". It is
+  copied into `<id>.answer.md`, untruncated, one block per concluded turn.
+- Turns are continued with **`codex exec resume <threadId>`**. That is what makes `send` interrupt an
+  in-flight turn and resume carrying your message, deterministically, at a boundary the supervisor chooses
+  — and everything already completed is preserved: verified, a turn killed after 3 of 10 tool calls resumed
+  and correctly reported all three results. The old transport typed into a TUI input box, so a message
+  landed mid-turn or at the next turn depending on how much work remained, a race nobody could see.
+- Exactly **one Codex process per thread** at a time, which is what keeps the event stream and the answer
+  file single-writer.
+- A **failure to start is fast and loud.** Codex exits non-zero in about a second with the reason on
+  stderr, and the supervisor records it the moment it happens — including skipping the two known benign
+  progress lines, because the first line of an untrusted-directory failure is
+  `Reading additional input from stdin...` and reporting that as the cause sends you after the wrong
+  problem.
 
-Architecture: [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
+The bound decision lives in `src/bounds.ts` as one pure function with two enforcers: the supervisor, which
+can warn as well as kill, and every observing command, which re-derives the run from its files and kills one
+whose supervisor died holding it open. It is not tied to `--wait`. Leaving a run unbounded on one path is
+this repo's original sin and the new design does not get to reintroduce it.
+
+Architecture: [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md). Behaviours: [docs/SPEC.md](docs/SPEC.md).
 
 ## License
 

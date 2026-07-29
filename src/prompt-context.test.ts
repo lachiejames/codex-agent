@@ -1,13 +1,9 @@
+import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 import { estimateTokens } from "./files.ts";
-import {
-  buildPromptContext,
-  estimatePromptText,
-  readCartographerMapMetadata,
-} from "./prompt-context.ts";
+import { buildPromptContext, estimatePromptText, readCartographerMapMetadata } from "./prompt-context.ts";
 
 describe("readCartographerMapMetadata", () => {
   test("reads total_tokens from Cartographer frontmatter", () => {
@@ -39,48 +35,39 @@ describe("buildPromptContext", () => {
     expect(result.accounting.estimatedTokens).toBe(estimateTokens(taskPrompt));
     expect(result.accounting.taskPrompt).toEqual(estimatePromptText(taskPrompt));
     expect(result.accounting.map).toEqual({
+      ambiguousWith: [],
+      bytes: 0,
+      cartographerTotalTokens: null,
+      estimatedTokens: 0,
       included: false,
       path: null,
-      bytes: 0,
-      estimatedTokens: 0,
-      cartographerTotalTokens: null,
-      ambiguousWith: [],
     });
     expect(result.accounting.components.map((component) => component.kind)).toEqual(["task_prompt"]);
   });
 
   test("keeps map estimated tokens separate from Cartographer metadata total_tokens", async () => {
     const taskPrompt = "Build the feature.";
-    const map = [
-      "---",
-      "total_tokens: 12000",
-      "---",
-      "",
-      "# Codebase Map",
-      "Short map body.",
-    ].join("\n");
+    const map = ["---", "total_tokens: 12000", "---", "", "# Codebase Map", "Short map body."].join("\n");
 
     const result = await buildPromptContext({
-      taskPrompt,
       includeMap: true,
       mapContent: map,
       mapPath: "/tmp/CODEBASE_MAP.md",
+      taskPrompt,
     });
 
     expect(result.prompt).toBe(`## Codebase Map\n\n${map}\n\n---\n\n${taskPrompt}`);
     expect(result.accounting.map).toEqual({
+      ambiguousWith: [],
+      bytes: Buffer.byteLength(map, "utf8"),
+      cartographerTotalTokens: 12000,
+      estimatedTokens: estimateTokens(map),
       included: true,
       path: "/tmp/CODEBASE_MAP.md",
-      bytes: Buffer.byteLength(map, "utf8"),
-      estimatedTokens: estimateTokens(map),
-      cartographerTotalTokens: 12000,
-      ambiguousWith: [],
     });
     expect(result.accounting.taskPrompt).toEqual(estimatePromptText(taskPrompt));
     expect(result.accounting.estimatedTokens).toBe(estimateTokens(result.prompt));
-    expect(result.accounting.map.estimatedTokens).not.toBe(
-      result.accounting.map.cartographerTotalTokens,
-    );
+    expect(result.accounting.map.estimatedTokens).not.toBe(result.accounting.map.cartographerTotalTokens);
     expect(result.accounting.components.map((component) => component.kind)).toEqual([
       "map_wrapper",
       "codebase_map",
@@ -93,20 +80,14 @@ describe("buildPromptContext", () => {
     const docsDir = join(cwd, "docs");
     mkdirSync(docsDir);
 
-    const map = [
-      "---",
-      "total_tokens: 42",
-      "---",
-      "",
-      "# Loaded Map",
-    ].join("\n");
+    const map = ["---", "total_tokens: 42", "---", "", "# Loaded Map"].join("\n");
     const mapPath = join(docsDir, "CODEBASE_MAP.md");
     writeFileSync(mapPath, map);
 
     const result = await buildPromptContext({
-      taskPrompt: "Use the loaded map.",
-      includeMap: true,
       cwd,
+      includeMap: true,
+      taskPrompt: "Use the loaded map.",
     });
 
     expect(result.accounting.map.included).toBe(true);

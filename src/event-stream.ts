@@ -319,6 +319,10 @@ export function splitCompleteLines(buffer: string): { lines: string[]; remainder
   };
 }
 
+function countMalformedLine(metrics: StreamMetrics): StreamMetrics {
+  return { ...metrics, malformedLines: metrics.malformedLines + 1 };
+}
+
 /** Fold a batch of complete lines into existing metrics. */
 export function foldLines(metrics: StreamMetrics, lines: readonly string[]): StreamMetrics {
   let current = metrics;
@@ -326,7 +330,7 @@ export function foldLines(metrics: StreamMetrics, lines: readonly string[]): Str
   for (const line of lines) {
     const event = parseEventLine(line);
     if (!event) {
-      current = { ...current, malformedLines: current.malformedLines + 1 };
+      current = countMalformedLine(current);
       continue;
     }
     current = foldEvent(current, event);

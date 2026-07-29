@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { formatRunReport, judgeRun, type JudgementInput, type RunReport } from "./report.ts";
 import type { RunLedger } from "./contract.ts";
+import { formatRunReport, type JudgementInput, judgeRun, type RunReport } from "./report.ts";
 
 function judgementInput(overrides: Partial<JudgementInput> = {}): JudgementInput {
   return {
+    breachReason: null,
+    hasAnswer: true,
     passKind: "review",
     requiresVerdict: true,
     status: "completed",
     verdict: "CLEAN",
-    breachReason: null,
-    hasAnswer: true,
     ...overrides,
   };
 }
@@ -25,9 +25,7 @@ describe("judgeRun", () => {
   test("a plan with an answer is a usable result even with no verdict", () => {
     // Job f343761d: this is the run written off as a total loss. It answered, and a plan
     // pass requires no verdict, so it must not be graded as a failure.
-    const judgement = judgeRun(
-      judgementInput({ passKind: "plan", requiresVerdict: false, verdict: null })
-    );
+    const judgement = judgeRun(judgementInput({ passKind: "plan", requiresVerdict: false, verdict: null }));
     expect(judgement.failed).toBe(false);
     expect(judgement.summary).toContain("requires no verdict");
   });
@@ -41,74 +39,82 @@ describe("judgeRun", () => {
 
   test("a run with nothing persisted is a failed run", () => {
     const judgement = judgeRun(
-      judgementInput({ passKind: "plan", requiresVerdict: false, verdict: null, hasAnswer: false })
+      judgementInput({ hasAnswer: false, passKind: "plan", requiresVerdict: false, verdict: null }),
     );
     expect(judgement.failed).toBe(true);
     expect(judgement.summary).toContain("No answer");
   });
 
-  // Breach reasons must win over "no verdict", and must be distinguishable from each
-  // other — reporting a blocked run as non-convergence sends the reader to narrow a
-  // question that was never reached.
+  // Breach reasons must win over "no verdict", and must be distinguishable from each other —
+  // a stalled run reported as non-convergence sends the reader to narrow a question that was
+  // never the problem.
+  //
+  // There used to be a third case, `blocked`, plus two tests specifically about it. It is gone
+  // with the tmux transport: `codex exec` exits non-zero in about a second with the reason on
+  // stderr rather than sitting on an interactive prompt, so no run can be killed for being
+  // blocked and `KillReason` no longer spells it.
   const breachCases: Array<{ reason: NonNullable<JudgementInput["breachReason"]>; expect: string }> = [
-    { reason: "blocked", expect: "never started work" },
-    { reason: "wall_clock", expect: "wall-clock bound" },
-    { reason: "stalled", expect: "flat-lined" },
+    { expect: "wall-clock bound", reason: "wall_clock" },
+    { expect: "flat-lined", reason: "stalled" },
   ];
 
   for (const testCase of breachCases) {
     test(`reports a ${testCase.reason} breach specifically`, () => {
-      const judgement = judgeRun(judgementInput({ verdict: null, breachReason: testCase.reason }));
+      const judgement = judgeRun(judgementInput({ breachReason: testCase.reason, verdict: null }));
       expect(judgement.failed).toBe(true);
       expect(judgement.summary).toContain(testCase.expect);
       expect(judgement.remedy.length).toBeGreaterThan(0);
     });
   }
 
-  test("a breach outranks a produced verdict's remedy advice", () => {
-    // A run killed while blocked cannot have concluded, so the blocked explanation stands.
-    const judgement = judgeRun(judgementInput({ breachReason: "blocked" }));
-    expect(judgement.summary).toContain("blocked");
+  test("a breach outranks a produced verdict", () => {
+    // A run killed at its bound cannot have concluded, so the breach explanation stands even
+    // when a verdict token is somehow present on the record.
+    const judgement = judgeRun(judgementInput({ breachReason: "wall_clock" }));
+    expect(judgement.failed).toBe(true);
+    expect(judgement.summary).toBe("Killed at its wall-clock bound without concluding.");
   });
 
-  test("does not tell a blocked run to narrow its question", () => {
-    const judgement = judgeRun(judgementInput({ verdict: null, breachReason: "blocked" }));
-    expect(judgement.remedy).toContain("Do not narrow the question");
+  test("tells a stalled run to read its stream and its stderr, not to narrow the question", () => {
+    const judgement = judgeRun(judgementInput({ breachReason: "stalled", verdict: null }));
+    expect(judgement.remedy).toContain("codex-agent tail <id>");
+    expect(judgement.remedy).toContain(".stderr");
+    expect(judgement.remedy).not.toContain("Narrow");
   });
 });
 
 function ledgerFixture(overrides: Partial<RunLedger> = {}): RunLedger {
   return {
+    breachReason: null,
+    bypass: null,
+    cumulativeInputTokens: 45_000,
+    durationMs: 51_000,
+    execCount: 0,
     jobId: "abc12345",
+    model: "gpt-5.6-sol",
     passKind: "review",
     reasoning: "xhigh",
-    model: "gpt-5.6-sol",
-    durationMs: 51_000,
+    scoped: true,
+    timedOut: false,
     tokensSpent: 31_000,
-    cumulativeInputTokens: 45_000,
-    execCount: 0,
     verdict: "BROKEN",
     verdictProduced: true,
-    scoped: true,
-    bypass: null,
-    timedOut: false,
-    breachReason: null,
     ...overrides,
   };
 }
 
 function reportFixture(overrides: Partial<RunReport> = {}): RunReport {
   return {
-    jobId: "abc12345",
-    passKind: "review",
-    status: "completed",
-    asked: "PROPERTY: no message is delivered twice",
-    answers: [{ turnId: "t1", timestamp: "2026-07-29T00:00:00.000Z", text: "Found it.\n\nVERDICT: BROKEN" }],
+    answers: [{ text: "Found it.\n\nVERDICT: BROKEN", timestamp: "2026-07-29T00:00:00.000Z", turnId: "t1" }],
     answersTruncated: false,
-    ledger: ledgerFixture(),
-    judgement: judgeRun(judgementInput({ verdict: "BROKEN" })),
+    asked: "PROPERTY: no message is delivered twice",
     breachMessage: null,
+    jobId: "abc12345",
+    judgement: judgeRun(judgementInput({ verdict: "BROKEN" })),
+    ledger: ledgerFixture(),
+    passKind: "review",
     promptPath: "/tmp/jobs/abc12345.prompt",
+    status: "completed",
     ...overrides,
   };
 }
@@ -126,9 +132,7 @@ describe("formatRunReport", () => {
 
   test("shows the answer untruncated", () => {
     const long = "y".repeat(9_000);
-    const text = formatRunReport(
-      reportFixture({ answers: [{ turnId: "t1", timestamp: "now", text: long }] })
-    );
+    const text = formatRunReport(reportFixture({ answers: [{ text: long, timestamp: "now", turnId: "t1" }] }));
     expect(text).toContain(long);
   });
 
@@ -156,9 +160,9 @@ describe("formatRunReport", () => {
     const text = formatRunReport(
       reportFixture({
         breachMessage: "wall-clock bound of 45m reached after 45m",
-        ledger: ledgerFixture({ verdict: null, verdictProduced: false, breachReason: "wall_clock" }),
-        judgement: judgeRun(judgementInput({ verdict: null, breachReason: "wall_clock" })),
-      })
+        judgement: judgeRun(judgementInput({ breachReason: "wall_clock", verdict: null })),
+        ledger: ledgerFixture({ breachReason: "wall_clock", verdict: null, verdictProduced: false }),
+      }),
     );
     expect(text).toContain("--- Why it was stopped ---");
     expect(text).toContain("wall-clock bound of 45m");
@@ -170,17 +174,17 @@ describe("formatRunReport", () => {
     const text = formatRunReport(
       reportFixture({
         answers: [
-          { turnId: "t1", timestamp: "2026-07-29T00:00:00.000Z", text: "first" },
-          { turnId: "t2", timestamp: "2026-07-29T00:05:00.000Z", text: "second" },
+          { text: "first", timestamp: "2026-07-29T00:00:00.000Z", turnId: "t1" },
+          { text: "second", timestamp: "2026-07-29T00:05:00.000Z", turnId: "t2" },
         ],
-      })
+      }),
     );
     expect(text).toContain("turn 1 of 2");
     expect(text).toContain("turn 2 of 2");
   });
 
   test("tolerates a job with no ledger and no prompt", () => {
-    const text = formatRunReport(reportFixture({ ledger: null, asked: "", promptPath: null }));
+    const text = formatRunReport(reportFixture({ asked: "", ledger: null, promptPath: null }));
     expect(text).toContain("the prompt was not recorded");
     expect(text).not.toContain("--- Ledger ---");
   });

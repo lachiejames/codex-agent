@@ -23,7 +23,7 @@
 // the same answer on both kinds of filesystem, returns the name that is actually on disk,
 // and is the only version that can notice several case variants existing at once.
 
-import { readFileSync, readdirSync, realpathSync, statSync } from "fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { join, resolve } from "path";
 
 export interface CodebaseMapFile {
@@ -43,15 +43,13 @@ export interface CodebaseMapFile {
 /**
  * Candidate map locations, in priority order.
  *
- * `docs/ARCHITECTURE.md` is an inherited fallback and is deliberately kept — but it is now
- * *reported*, so a caller who did not mean to send an architecture document can see that it
- * happened instead of finding out from the token bill.
+ * `docs/ARCHITECTURE.md` used to be a third fallback here, inherited from upstream. It is gone.
+ * A repo with no codebase map but any architecture document would have that document silently
+ * injected into a planning prompt — a different artifact, written for a different audience, at
+ * whatever token cost it happened to carry. `--map` now means the codebase map or nothing, and
+ * says which it found.
  */
-const MAP_CANDIDATES = [
-  "docs/CODEBASE_MAP.md",
-  "CODEBASE_MAP.md",
-  "docs/ARCHITECTURE.md",
-] as const;
+const MAP_CANDIDATES = ["docs/CODEBASE_MAP.md", "CODEBASE_MAP.md"] as const;
 
 export function estimateTokens(text: string): number {
   // Rough estimate: ~4 characters per token
@@ -76,15 +74,9 @@ export interface EntryChoice {
  * reported as ambiguous; ordering is otherwise lexicographic, so the choice never depends on
  * directory iteration order.
  */
-export function chooseEntry({
-  entries,
-  wantedName,
-}: {
-  entries: string[];
-  wantedName: string;
-}): EntryChoice | null {
+export function chooseEntry({ entries, wantedName }: { entries: string[]; wantedName: string }): EntryChoice | null {
   const wantedLower = wantedName.toLowerCase();
-  const matches = entries.filter((entry) => entry.toLowerCase() === wantedLower).sort();
+  const matches = entries.filter((entry) => entry.toLowerCase() === wantedLower).toSorted();
 
   const [firstMatch] = matches;
   if (firstMatch === undefined) return null;
@@ -100,11 +92,7 @@ export function chooseEntry({
  * the wrong kind — a directory merely named like a map is not a map — then defers the actual
  * choice to the pure function.
  */
-function resolveSegment(
-  parent: string,
-  wantedName: string,
-  wantDirectory: boolean
-): EntryChoice | null {
+function resolveSegment(parent: string, wantedName: string, wantDirectory: boolean): EntryChoice | null {
   let entries: string[];
   try {
     entries = readdirSync(parent);
@@ -134,10 +122,7 @@ function resolveSegment(
  * defect this module exists to remove, one level up the path — so the walk covers the whole
  * path rather than its last component.
  */
-function resolveCandidate(
-  cwd: string,
-  candidate: string
-): { path: string; ambiguousWith: string[] } | null {
+function resolveCandidate(cwd: string, candidate: string): { path: string; ambiguousWith: string[] } | null {
   const segments = candidate.split("/").filter((segment) => segment.length > 0 && segment !== ".");
   if (segments.length === 0) return null;
 
@@ -153,7 +138,7 @@ function resolveCandidate(
     current = join(current, match.chosen);
   }
 
-  return { path: canonicalise(current), ambiguousWith: ambiguousWith.map(canonicalise) };
+  return { ambiguousWith: ambiguousWith.map(canonicalise), path: canonicalise(current) };
 }
 
 /**
@@ -187,7 +172,7 @@ export async function findCodebaseMap(cwd: string): Promise<CodebaseMapFile | nu
 
     try {
       const content = readFileSync(resolved.path, "utf-8");
-      return { path: resolved.path, content, ambiguousWith: resolved.ambiguousWith };
+      return { ambiguousWith: resolved.ambiguousWith, content, path: resolved.path };
     } catch {
       // Unreadable despite existing — fall through to the next candidate.
     }

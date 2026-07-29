@@ -74,9 +74,7 @@ export function readCartographerMapMetadata(mapContent: string): CartographerMap
   return { totalTokens: null };
 }
 
-export async function buildPromptContext(
-  options: BuildPromptContextOptions,
-): Promise<BuiltPromptContext> {
+export async function buildPromptContext(options: BuildPromptContextOptions): Promise<BuiltPromptContext> {
   const taskComponent = buildComponent("task_prompt", "Task prompt", options.taskPrompt);
   const components: PromptContextComponent[] = [];
 
@@ -100,20 +98,20 @@ export async function buildPromptContext(
     components.push(taskComponent);
     const promptEstimate = estimatePromptText(options.taskPrompt);
     return {
-      prompt: options.taskPrompt,
       accounting: {
         ...promptEstimate,
-        taskPrompt: estimatePromptText(options.taskPrompt),
+        components,
         map: {
+          ambiguousWith: [],
+          bytes: 0,
+          cartographerTotalTokens: null,
+          estimatedTokens: 0,
           included: false,
           path: null,
-          bytes: 0,
-          estimatedTokens: 0,
-          cartographerTotalTokens: null,
-          ambiguousWith: [],
         },
-        components,
+        taskPrompt: estimatePromptText(options.taskPrompt),
       },
+      prompt: options.taskPrompt,
     };
   }
 
@@ -127,28 +125,24 @@ export async function buildPromptContext(
   const metadata = readCartographerMapMetadata(mapContent);
 
   return {
-    prompt,
     accounting: {
       ...promptEstimate,
-      taskPrompt: estimatePromptText(options.taskPrompt),
+      components,
       map: {
+        ambiguousWith: mapAmbiguousWith,
+        bytes: mapComponent.bytes,
+        cartographerTotalTokens: metadata.totalTokens,
+        estimatedTokens: mapComponent.estimatedTokens,
         included: true,
         path: mapPath,
-        bytes: mapComponent.bytes,
-        estimatedTokens: mapComponent.estimatedTokens,
-        cartographerTotalTokens: metadata.totalTokens,
-        ambiguousWith: mapAmbiguousWith,
       },
-      components,
+      taskPrompt: estimatePromptText(options.taskPrompt),
     },
+    prompt,
   };
 }
 
-function buildComponent(
-  kind: PromptContextComponentKind,
-  label: string,
-  text: string,
-): PromptContextComponent {
+function buildComponent(kind: PromptContextComponentKind, label: string, text: string): PromptContextComponent {
   return {
     kind,
     label,
