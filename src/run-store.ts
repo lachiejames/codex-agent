@@ -81,6 +81,16 @@ export interface Run {
   turnStartedAt?: string;
   /** Whether the current logical turn has already been warned. Reset by a steer. */
   warned: boolean;
+  /**
+   * How many times an operator steer re-armed the bound.
+   *
+   * A steer starts a NEW logical turn, so it deliberately gets a fresh deadline — that is the
+   * steering behaviour this tool exists to provide. But an adversarial pass pointed out the
+   * consequence: repeated steers can carry a run far past its stated bound, and nothing said so.
+   * Counting them makes a run that has consumed 10x its nominal bound visible in `status` and in
+   * the ledger, instead of a number that quietly stopped meaning anything.
+   */
+  boundRearmedCount: number;
   metrics: StreamMetrics;
   /** Bytes of `.jsonl` already folded into `metrics`, so reads stay incremental. */
   streamOffset: number;
@@ -118,6 +128,8 @@ export const RUN_ARTIFACTS = {
   events: ".jsonl",
   /** `--output-last-message` target for the CURRENT invocation. The answer of record. */
   lastMessage: ".last.txt",
+  /** Exclusive ownership. Exactly one supervisor may hold this. See acquireSupervisorLock. */
+  lock: ".lock",
   /** The run record itself. */
   record: ".run.json",
   /** Codex stderr. The only place a fast startup failure explains itself. */
@@ -176,6 +188,7 @@ export interface CreateRunOptions {
 
 export function createRun(options: CreateRunOptions): Run {
   return {
+    boundRearmedCount: 0,
     breachMessage: null,
     breachReason: null,
     bypass: options.bypass,
@@ -402,4 +415,76 @@ export function purgeOldRuns(maxAgeDays: number): { runsRemoved: number; bytesFr
   }
 
   return { bytesFreed, runsRemoved };
+}
+
+// --------------------------------------------------------------------------
+// The supervisor lock
+// --------------------------------------------------------------------------
+
+/**
+ * Exclusive ownership of a run, held by exactly one supervisor.
+ *
+ * FOUND BY AN ADVERSARIAL PASS ON THIS TRANSPORT'S OWN DIFF. `run.supervisorPid` is mutable
+ * metadata, not mutual exclusion — and `sendToRun` decides whether to spawn a supervisor by
+ * checking whether one is alive, which is a check-then-act race. Two concurrent
+ * `codex-agent send` calls on an idle run both saw no supervisor, both spawned one, and both
+ * children then appended to the same `.jsonl` and the same `.answer.md`. Parallel use is the
+ * whole point of this tool, so that race is reachable rather than theoretical.
+ *
+ * `wx` makes creation atomic at the filesystem level: exactly one caller can win, no matter how
+ * many race. The loser exits rather than sharing the stream.
+ */
+export function acquireSupervisorLock(runId: string, pid: number): boolean {
+  const path = runArtifactPath(runId, RUN_ARTIFACTS.lock);
+  if (!path) return false;
+
+  try {
+    // "wx" fails if the path exists. This is the atomic step; everything below is stale-lock
+    // recovery, which is only reached when a lock already exists.
+    writeFileSync(path, String(pid), { flag: "wx" });
+    return true;
+  } catch {
+    // Someone holds it — or a crashed supervisor left it behind. A lock held by a dead process
+    // must not wedge a run forever, but "the holder is dead" has to be established, never
+    // assumed: an unreadable or unparseable lock is treated as HELD, because wrongly stealing a
+    // live lock reintroduces the exact concurrency this prevents.
+    let holder: number | null = null;
+    try {
+      const parsed = Number.parseInt(readFileSync(path, "utf-8").trim(), 10);
+      holder = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+    } catch {
+      return false;
+    }
+    if (holder === null) return false;
+
+    try {
+      process.kill(holder, 0);
+      return false; // Alive. Not ours.
+    } catch {
+      // Dead. Remove and make exactly one more attempt — a bounded retry, so two processes
+      // racing to reclaim the same stale lock cannot loop.
+      try {
+        unlinkSync(path);
+        writeFileSync(path, String(pid), { flag: "wx" });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+}
+
+/** Release the lock, but only if we still hold it. */
+export function releaseSupervisorLock(runId: string, pid: number): void {
+  const path = runArtifactPath(runId, RUN_ARTIFACTS.lock);
+  if (!path) return;
+
+  try {
+    // Checked before unlinking so a supervisor that lost its lock to stale-recovery cannot
+    // delete the lock of whoever legitimately took over.
+    if (Number.parseInt(readFileSync(path, "utf-8").trim(), 10) !== pid) return;
+    unlinkSync(path);
+  } catch {
+    // Already gone, which is the desired end state.
+  }
 }

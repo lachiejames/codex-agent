@@ -41,6 +41,7 @@ import { buildWrapUpPrompt, evaluateBound, formatElapsed, type KillReason } from
 import { extractVerdict } from "./contract.ts";
 import { foldLines, splitCompleteLines } from "./event-stream.ts";
 import {
+  acquireSupervisorLock,
   clearLastMessage,
   ensureJobsDir,
   loadRun,
@@ -51,6 +52,7 @@ import {
   readLastMessage,
   readStderrTail,
   readStreamSince,
+  releaseSupervisorLock,
   runArtifactPath,
   saveRun,
   takeSteer,
@@ -369,6 +371,16 @@ async function supervise(runId: string): Promise<number> {
     return 1;
   }
 
+  // EXACTLY ONE SUPERVISOR PER RUN. Taken before anything is written, because the whole point
+  // is that the loser must not touch the event stream or the answer file. Found by an
+  // adversarial pass on this file's own diff: `supervisorPid` is metadata, and two concurrent
+  // `send` calls on an idle run could both spawn a supervisor and both append.
+  if (!acquireSupervisorLock(runId, process.pid)) {
+    process.stderr.write(`supervisor: run ${runId} is already owned by another supervisor\n`);
+    log(runId, `refusing to start: lock held by another supervisor`);
+    return 0;
+  }
+
   const run = loaded;
   run.supervisorPid = process.pid;
   run.status = "running";
@@ -452,9 +464,10 @@ async function supervise(runId: string): Promise<number> {
     prompt = outcome.message;
     resume = true;
     run.warned = false;
+    run.boundRearmedCount += 1;
     turnStartedAtMs = Date.now();
     run.turnStartedAt = new Date(turnStartedAtMs).toISOString();
-    log(runId, "resuming with operator steer, new bound window");
+    log(runId, `resuming with operator steer, new bound window (re-armed ${run.boundRearmedCount}x)`);
   }
 }
 
@@ -466,7 +479,9 @@ async function main(): Promise<void> {
   }
 
   try {
-    process.exit(await supervise(runId));
+    const code = await supervise(runId);
+    releaseSupervisorLock(runId, process.pid);
+    process.exit(code);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(runId, `supervisor crashed: ${message}`);
@@ -480,6 +495,7 @@ async function main(): Promise<void> {
       run.completedAt = new Date().toISOString();
       saveRun(run);
     }
+    releaseSupervisorLock(runId, process.pid);
     process.exit(1);
   }
 }
