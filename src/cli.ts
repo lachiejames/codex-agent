@@ -515,7 +515,10 @@ async function main(): Promise<void> {
       console.log(`Run:        ${run.id}`);
       console.log(`Status:     ${run.status}`);
       console.log(`Progress:   ${formatRunProgress(run)}`);
-      console.log(`Bound:      ${run.timeoutMinutes}m per turn${run.warned ? " (warned)" : ""}`);
+      console.log(
+        `Bound:      ${run.timeoutMinutes}m per turn${run.warned ? " (warned)" : ""}` +
+          (run.boundRearmedCount > 0 ? `, re-armed ${run.boundRearmedCount}x by steers` : ""),
+      );
       console.log(`Thread:     ${run.threadId ?? "-"}`);
       console.log(
         `Supervisor: ${run.supervisorPid ?? "-"}${isProcessAlive(run.supervisorPid) ? " (alive)" : " (gone)"}`,
