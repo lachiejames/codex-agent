@@ -8,7 +8,7 @@
 //
 // See docs/SPEC.md for the eleven behaviours this implements.
 
-import { config, type ReasoningEffort, type SandboxMode } from "./config.ts";
+import { config, type SandboxMode } from "./config.ts";
 import {
   type BypassKind,
   evaluateContract,
@@ -69,6 +69,11 @@ Invocation contract:
   Fan out rather than widen. Five reviewers on five properties is the intended shape of a
   review; each is its own run, its own process and its own bound.
 
+The thinker is pinned, not chosen:
+  Every pass runs ${config.model} at ${config.reasoningEffort}. There is no flag to lower either,
+  because a pass that silently downgrades the model is a footgun — you would ask for a check and
+  quietly get a worse thinker than every other pass. Bound the question, not the thinking.
+
 Supervision:
   A supervisor process owns each run for its whole life, so a pass that cannot start says so in
   seconds rather than burning its bound in silence. 'send' interrupts an in-flight turn and
@@ -83,8 +88,6 @@ Options:
       --max-checks <n>       Override the enumerated-check limit for this call
       --word-cap <n>         Override the answer word cap (0 disables)
       --no-contract          Disable contract enforcement entirely (escape hatch, recorded)
-  -r, --reasoning <level>    Reasoning effort: ${config.reasoningEfforts.join(", ")} (default: ${config.defaultReasoningEffort})
-  -m, --model <model>        Model name (default: ${config.model})
   -s, --sandbox <mode>       Sandbox (default: ${config.defaultSandbox} — Codex plans, it does not write)
   -w, --wait                 Wait for the run to conclude, printing a running cost line
   -d, --dir <path>           Working directory (default: cwd)
@@ -102,9 +105,22 @@ Exit codes:
   4  the run is not a usable result (no verdict, or a guard stopped it)
 `;
 
+/**
+ * Flags that existed and deliberately do not any more, with the reason.
+ *
+ * A removed flag that reports "unknown option" teaches nothing; a caller retries with a
+ * variation. Saying WHY it went stops the next attempt.
+ */
+const RETIRED_FLAGS: Record<string, string> = {
+  "--clean": "There is no terminal output to clean any more. Use `codex-agent tail <id>` for the event stream.",
+  "--model": "The model is pinned to the strongest available and is not selectable. See docs/SPEC.md behaviour 2.",
+  "--reasoning": "Reasoning effort is pinned to xhigh and is not selectable — bound the question, not the thinking.",
+  "--strip-ansi": "There is no terminal output to strip any more. Use `codex-agent tail <id>`.",
+  "-m": "The model is pinned to the strongest available and is not selectable. See docs/SPEC.md behaviour 2.",
+  "-r": "Reasoning effort is pinned to xhigh and is not selectable — bound the question, not the thinking.",
+};
+
 interface Options {
-  reasoning: ReasoningEffort;
-  model: string;
   sandbox: SandboxMode;
   wait: boolean;
   dir: string;
@@ -122,7 +138,6 @@ interface Options {
   /** undefined defers to the profile, null means no cap, a number caps explicitly. */
   wordCap: number | null | undefined;
   contractEnabled: boolean;
-  reasoningExplicit: boolean;
   sandboxExplicit: boolean;
 }
 
@@ -137,11 +152,8 @@ function parseArgs(args: string[]): { command: string; positional: string[]; opt
     json: false,
     limit: config.runsListLimit,
     maxChecks: null,
-    model: config.model,
     passKind: null,
     property: null,
-    reasoning: config.defaultReasoningEffort,
-    reasoningExplicit: false,
     sandbox: config.defaultSandbox,
     sandboxExplicit: false,
     timeoutMinutes: null,
@@ -167,17 +179,6 @@ function parseArgs(args: string[]): { command: string; positional: string[]; opt
     if (arg === "-h" || arg === "--help") {
       console.log(HELP);
       process.exit(0);
-    } else if (arg === "-r" || arg === "--reasoning") {
-      const level = args[++index] as ReasoningEffort;
-      if (!config.reasoningEfforts.includes(level)) {
-        console.error(`Invalid reasoning level: ${level}`);
-        console.error(`Valid options: ${config.reasoningEfforts.join(", ")}`);
-        process.exit(1);
-      }
-      options.reasoning = level;
-      options.reasoningExplicit = true;
-    } else if (arg === "-m" || arg === "--model") {
-      options.model = args[++index] ?? config.model;
     } else if (arg === "-s" || arg === "--sandbox") {
       const mode = args[++index] as SandboxMode;
       if (!config.sandboxModes.includes(mode)) {
@@ -222,7 +223,18 @@ function parseArgs(args: string[]): { command: string; positional: string[]; opt
       options.wordCap = parsed === 0 ? null : parsed;
     } else if (arg === "--no-contract") {
       options.contractEnabled = false;
-    } else if (arg !== undefined && !arg.startsWith("-")) {
+    } else if (arg !== undefined && arg.startsWith("-")) {
+      // An unrecognised flag is an ERROR, never ignored.
+      //
+      // The parser used to fall through on anything it did not recognise, which was harmless
+      // while every flag existed. It stopped being harmless the moment `-r` and `-m` were
+      // removed: `-r low` would have dropped the flag AND appended "low" to the prompt as a
+      // positional, silently corrupting the question being asked.
+      const retired = RETIRED_FLAGS[arg];
+      console.error(retired ? `${arg} was removed. ${retired}` : `Unknown option: ${arg}`);
+      console.error("Run `codex-agent --help` for the current flags.");
+      process.exit(1);
+    } else if (arg !== undefined) {
       if (command) positional.push(arg);
       else command = arg;
     }
@@ -255,7 +267,6 @@ async function readStdinScope(): Promise<string | null> {
 interface PreparedLaunch {
   context: BuiltPromptContext;
   passKind: PassKind;
-  reasoning: ReasoningEffort;
   sandbox: SandboxMode;
   timeoutMinutes: number;
   requiresVerdict: boolean;
@@ -319,7 +330,6 @@ async function prepareLaunch(taskPrompt: string, options: Options): Promise<Prep
     );
   }
 
-  const reasoning = options.reasoningExplicit ? options.reasoning : profile.reasoning;
   const sandbox = options.sandboxExplicit ? options.sandbox : profile.sandbox;
 
   let finalPrompt: string;
@@ -360,7 +370,6 @@ async function prepareLaunch(taskPrompt: string, options: Options): Promise<Prep
     bypass,
     context,
     passKind,
-    reasoning,
     requiresVerdict: profile.requiresVerdict,
     sandbox,
     scoped: Boolean(scopeText),
@@ -396,8 +405,8 @@ async function launch(taskPrompt: string, options: Options): Promise<void> {
     console.log(
       `Would send ~${accounting.estimatedTokens.toLocaleString()} tokens (${accounting.bytes.toLocaleString()} bytes)`,
     );
-    console.log(`Model: ${options.model}`);
-    console.log(`Reasoning: ${prepared.reasoning}`);
+    console.log(`Model: ${config.model}`);
+    console.log(`Reasoning: ${config.reasoningEffort}`);
     console.log(`Sandbox: ${prepared.sandbox}`);
     console.log(`Pass: ${prepared.passKind} (${PASS_PROFILES[prepared.passKind].description})`);
     console.log(`Scoped by stdin: ${prepared.scoped ? "yes" : "no"}`);
@@ -414,10 +423,10 @@ async function launch(taskPrompt: string, options: Options): Promise<void> {
   const run = launchRun({
     bypass: prepared.bypass,
     cwd: options.dir,
-    model: options.model,
+    model: config.model,
     passKind: prepared.passKind,
     prompt: prepared.context.prompt,
-    reasoningEffort: prepared.reasoning,
+    reasoningEffort: config.reasoningEffort,
     requiresVerdict: prepared.requiresVerdict,
     sandbox: prepared.sandbox,
     scoped: prepared.scoped,

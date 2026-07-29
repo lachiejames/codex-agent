@@ -285,18 +285,20 @@ describe("Codex is the brain, not the hands", () => {
 
 describe("effort tiering per pass", () => {
   test("EVERY pass runs gpt-5.6-sol at xhigh — no exceptions", () => {
-    // This tool exists to think. A profile that quietly resolves to a weaker effort is a
-    // footgun: you ask for a pass and silently get a worse thinker than every other one.
-    // If cost ever matters more than depth, lower it per call with -r, visibly.
+    // This tool exists to think, so it always gets the strongest thinker. That used to be a
+    // per-profile field plus a `-r` override; both are gone. Four identical values were
+    // variation that never varied, and the override existed only to do the one thing the
+    // spec forbids.
     //
-    // buildCodexArgs passes `-c model=` and `-c model_reasoning_effort=` explicitly,
-    // which OVERRIDE ~/.codex/config.toml — so these values, not that file, are what
-    // every plugin-launched agent actually runs with.
+    // `runner.ts` passes `-c model=` and `-c model_reasoning_effort=` explicitly, which
+    // OVERRIDE ~/.codex/config.toml — so these two values, not that file, are what every
+    // launched agent actually runs with. There is exactly one place to change them.
     expect(config.model).toBe("gpt-5.6-sol");
-    expect(config.defaultReasoningEffort).toBe("xhigh");
+    expect(config.reasoningEffort).toBe("xhigh");
 
+    // The profiles still differ, just never in effort. Asserted so the table stays meaningful.
     for (const [kind, profile] of Object.entries(PASS_PROFILES)) {
-      expect(profile.reasoning, `pass "${kind}" must run at xhigh`).toBe("xhigh");
+      expect(profile.sandbox, `pass "${kind}" must be read-only`).toBe("read-only");
     }
   });
 

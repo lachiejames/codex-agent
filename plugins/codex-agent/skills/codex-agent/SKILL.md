@@ -532,23 +532,22 @@ They used to be one column fed by whichever was available, which is why the same
 appear to cost 253k or 1.1M. If you need a cost, read `SPENT` and treat `-` as unknown — never
 substitute `CUM-IN` for it.
 
-| Flag                | Values                                         | Description                                                                                                           |
-| ------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `--timeout`         | minutes                                        | **REQUIRED, no default.** Bounds one turn of thinking. Omitting it is exit 3                                          |
-| `--pass`            | plan, review, mechanical, adversarial          | Pass profile: effort, sandbox, word cap, check limit                                                                  |
-| `--property`        | string                                         | The single falsifiable claim to attack                                                                                |
-| `--allow-unscoped`  | flag                                           | Permit a verification pass with no stdin. Needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
-| `--max-checks`      | n                                              | Override the enumerated-check limit                                                                                   |
-| `--word-cap`        | n                                              | Override the answer cap (0 disables)                                                                                  |
-| `--no-contract`     | flag                                           | Disable enforcement (escape hatch); recorded as a bypass                                                              |
-| `-s`, `--sandbox`   | read-only, workspace-write, danger-full-access | Default `read-only`                                                                                                   |
-| `-r`, `--reasoning` | low, medium, high, xhigh                       | Overrides the pass profile                                                                                            |
-| `-d`, `--dir`       | path                                           | Working directory (default: cwd)                                                                                      |
-| `--map`             | flag (takes no value)                          | Include the codebase map; the resolved path is printed                                                                |
-| `-w`, `--wait`      | flag                                           | Return once the turn concludes, printing a cost line. The bound applies with or without it                            |
-| `--dry-run`         | flag                                           | Show the shaped prompt and the decision without executing                                                             |
-| `--json`            | flag                                           | Machine-readable output                                                                                               |
-| `--all`             | flag                                           | `runs`/`ledger`: show every run, not the newest 20                                                                    |
+| Flag               | Values                                         | Description                                                                                                           |
+| ------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `--timeout`        | minutes                                        | **REQUIRED, no default.** Bounds one turn of thinking. Omitting it is exit 3                                          |
+| `--pass`           | plan, review, mechanical, adversarial          | Pass profile: effort, sandbox, word cap, check limit                                                                  |
+| `--property`       | string                                         | The single falsifiable claim to attack                                                                                |
+| `--allow-unscoped` | flag                                           | Permit a verification pass with no stdin. Needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
+| `--max-checks`     | n                                              | Override the enumerated-check limit                                                                                   |
+| `--word-cap`       | n                                              | Override the answer cap (0 disables)                                                                                  |
+| `--no-contract`    | flag                                           | Disable enforcement (escape hatch); recorded as a bypass                                                              |
+| `-s`, `--sandbox`  | read-only, workspace-write, danger-full-access | Default `read-only`                                                                                                   |
+| `-d`, `--dir`      | path                                           | Working directory (default: cwd)                                                                                      |
+| `--map`            | flag (takes no value)                          | Include the codebase map; the resolved path is printed                                                                |
+| `-w`, `--wait`     | flag                                           | Return once the turn concludes, printing a cost line. The bound applies with or without it                            |
+| `--dry-run`        | flag                                           | Show the shaped prompt and the decision without executing                                                             |
+| `--json`           | flag                                           | Machine-readable output                                                                                               |
+| `--all`            | flag                                           | `runs`/`ledger`: show every run, not the newest 20                                                                    |
 
 There is no `-f`/`--file` flag — it was removed upstream. **stdin is the scope channel.**
 
