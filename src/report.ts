@@ -22,22 +22,22 @@ import {
 } from "./contract.ts";
 
 export interface JudgementInput {
-  passKind: PassKind | null;
+  readonly passKind: PassKind | null;
   /** Whether this pass profile demands a machine-checkable verdict. */
-  requiresVerdict: boolean;
-  status: "pending" | "running" | "completed" | "failed";
-  verdict: string | null;
-  breachReason: BreachReason | null;
+  readonly requiresVerdict: boolean;
+  readonly status: "pending" | "running" | "completed" | "failed";
+  readonly verdict: string | null;
+  readonly breachReason: BreachReason | null;
   /** Whether any answer was persisted at all. */
-  hasAnswer: boolean;
+  readonly hasAnswer: boolean;
 }
 
 export interface Judgement {
   /** True when this run must not be treated as a usable result. */
-  failed: boolean;
-  summary: string;
+  readonly failed: boolean;
+  readonly summary: string;
   /** What to do about it. Empty when there is nothing to do. */
-  remedy: string;
+  readonly remedy: string;
 }
 
 /**
@@ -109,23 +109,23 @@ export function judgeRun(input: JudgementInput): Judgement {
 }
 
 export interface RunReport {
-  jobId: string;
-  passKind: PassKind | null;
-  status: "pending" | "running" | "completed" | "failed";
+  readonly jobId: string;
+  readonly passKind: PassKind | null;
+  readonly status: "pending" | "running" | "completed" | "failed";
   /** The prompt as sent. */
-  asked: string;
-  answers: StoredAnswer[];
+  readonly asked: string;
+  readonly answers: StoredAnswer[];
   /**
    * True when the answers shown are the old 500-character previews rather than durable
    * captures. Must be surfaced: a truncated answer read as a whole one is how a review's
    * verdict went missing, since the verdict is deliberately the last line.
    */
-  answersTruncated: boolean;
-  ledger: RunLedger | null;
-  judgement: Judgement;
-  breachMessage: string | null;
+  readonly answersTruncated: boolean;
+  readonly ledger: RunLedger | null;
+  readonly judgement: Judgement;
+  readonly breachMessage: string | null;
   /** Where the untruncated prompt lives, for when the preview below is cut. */
-  promptPath: string | null;
+  readonly promptPath: string | null;
 }
 
 /**

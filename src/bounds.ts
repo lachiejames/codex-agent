@@ -57,20 +57,20 @@ export interface BoundInput {
    * (new question, new deadline). Measuring per-process instead would hand a run a fresh bound
    * every time it was warned, which is how a 10-minute bound becomes 18.5 minutes.
    */
-  turnElapsedMs: number;
+  readonly turnElapsedMs: number;
   /** The caller's explicit bound. Required on every invocation; there is no default. */
-  timeoutMinutes: number;
+  readonly timeoutMinutes: number;
   /** How long every progress signal has been flat. */
-  stalledForMs: number;
-  stallMinutes?: number | undefined;
+  readonly stalledForMs: number;
+  readonly stallMinutes?: number | undefined;
   /** Whether this logical turn has already been warned. A turn is warned at most once. */
-  warned: boolean;
+  readonly warned: boolean;
 }
 
 export interface BoundDecision {
-  action: BoundAction;
-  reason: KillReason | null;
-  message: string;
+  readonly action: BoundAction;
+  readonly reason: KillReason | null;
+  readonly message: string;
 }
 
 export function formatElapsed(ms: number): string {

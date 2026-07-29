@@ -30,11 +30,11 @@
 
 /** Per-turn token usage, exactly as `turn.completed` reports it. */
 export interface TurnUsage {
-  inputTokens: number;
-  cachedInputTokens: number;
-  cacheWriteInputTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheWriteInputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningOutputTokens: number;
 }
 
 export type CodexEvent =
@@ -58,7 +58,7 @@ export type CodexEvent =
  * 4.4x apart as a result. See docs/SPEC.md behaviour 3.
  */
 export interface StreamMetrics {
-  threadId: string | null;
+  readonly threadId: string | null;
   /**
    * How many DISTINCT thread ids this stream has carried.
    *
@@ -71,7 +71,7 @@ export interface StreamMetrics {
    * SAME id, verified on 0.145.0. Counting announcements flagged every healthy multi-turn
    * conversation as a violation.
    */
-  threadsAnnounced: number;
+  readonly threadsAnnounced: number;
   /**
    * Total well-formed events seen. This is the runaway backstop's liveness signal.
    *
@@ -80,23 +80,23 @@ export interface StreamMetrics {
    * evidence of writing. A monotonically increasing count of parsed events is direct evidence,
    * cannot alias, and cannot be defeated by renaming a file.
    */
-  eventCount: number;
+  readonly eventCount: number;
   /** Completed shell/tool calls. `0` is the HEALTHY signature of a scoped pass. */
-  execCount: number;
-  turnsStarted: number;
-  turnsCompleted: number;
+  readonly execCount: number;
+  readonly turnsStarted: number;
+  readonly turnsCompleted: number;
   /** True billed tokens: input + output summed across every completed turn. */
-  tokensSpent: number | null;
+  readonly tokensSpent: number | null;
   /** Input tokens only, summed across turns. Includes context re-sent each turn. Not spend. */
-  cumulativeInputTokens: number | null;
+  readonly cumulativeInputTokens: number | null;
   /** Most recent agent message. For progress display only — never the answer of record. */
-  lastAgentMessage: string | null;
+  readonly lastAgentMessage: string | null;
   /** Most recent command Codex ran, for "what is it doing right now". */
-  lastCommand: string | null;
+  readonly lastCommand: string | null;
   /** Reasons reported by the stream itself, oldest first. */
-  errors: string[];
+  readonly errors: string[];
   /** Lines that were not parseable JSON. A non-zero count means the stream is suspect. */
-  malformedLines: number;
+  readonly malformedLines: number;
 }
 
 export function emptyMetrics(): StreamMetrics {
@@ -256,13 +256,23 @@ function parseItemEvent(parsed: Record<string, unknown>, completed: boolean): Co
 // --------------------------------------------------------------------------
 
 /**
+ * A `StreamMetrics` that has not escaped yet.
+ *
+ * `foldEvent` folds by copying its input and writing to the copy, which is why callers can treat
+ * metrics as a value. Making `StreamMetrics` readonly and stripping it again for this one local
+ * type is what turns that from a convention into something the compiler checks: no caller can
+ * write to a metrics object, and the only writes that exist are to a draft nobody else holds.
+ */
+type MetricsDraft = { -readonly [K in keyof StreamMetrics]: StreamMetrics[K] };
+
+/**
  * Fold one event into the running metrics, returning a new value.
  *
  * Pure and incremental so the supervisor can apply only the bytes that arrived since its last
  * read, rather than re-parsing a stream that grows without bound while a run is in flight.
  */
 export function foldEvent(metrics: StreamMetrics, event: CodexEvent): StreamMetrics {
-  const next: StreamMetrics = { ...metrics, eventCount: metrics.eventCount + 1 };
+  const next: MetricsDraft = { ...metrics, eventCount: metrics.eventCount + 1 };
 
   switch (event.kind) {
     case "thread.started":

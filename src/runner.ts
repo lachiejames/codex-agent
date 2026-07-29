@@ -40,17 +40,17 @@ const MODEL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const THREAD_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
 
 export interface CodexInvocation {
-  model: string;
-  reasoningEffort: ReasoningEffort;
-  sandbox: SandboxMode;
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort;
+  readonly sandbox: SandboxMode;
   /** Where `--output-last-message` writes the final answer. The answer of record. */
-  lastMessagePath: string;
+  readonly lastMessagePath: string;
   /** The prompt for this turn. Passed as argv, never through a shell. */
-  prompt: string;
+  readonly prompt: string;
   /** Resume an existing thread instead of starting a new one. */
-  threadId?: string | undefined;
+  readonly threadId?: string | undefined;
   /** Allow running outside a git repository. */
-  skipGitRepoCheck?: boolean | undefined;
+  readonly skipGitRepoCheck?: boolean | undefined;
 }
 
 export function validateModelName(model: string): string {

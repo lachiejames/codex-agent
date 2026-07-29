@@ -34,21 +34,21 @@ import type { SandboxMode } from "./config.ts";
 export type PassKind = "plan" | "review" | "mechanical" | "adversarial";
 
 export interface PassProfile {
-  kind: PassKind;
+  readonly kind: PassKind;
   /**
    * Sandbox for this pass. Every pass here is read-only: Codex is the brain, Claude is
    * the body. Planning and reviewing are both pure reads, so no profile grants write.
    */
-  sandbox: SandboxMode;
+  readonly sandbox: SandboxMode;
   /** Word cap on the answer. An unbounded answer invites exploration over verdicts. */
-  wordCap: number | null;
+  readonly wordCap: number | null;
   /** Require a diff (or other scope) on stdin. */
-  requiresScope: boolean;
+  readonly requiresScope: boolean;
   /** Maximum independent checks allowed in one call. */
-  maxChecks: number;
+  readonly maxChecks: number;
   /** Require a machine-checkable VERDICT line in the answer. */
-  requiresVerdict: boolean;
-  description: string;
+  readonly requiresVerdict: boolean;
+  readonly description: string;
 }
 
 export const PASS_PROFILES: Record<PassKind, PassProfile> = {
@@ -172,36 +172,36 @@ export type ViolationCode = "unscoped_verification" | "excessive_breadth" | "unr
 export const MIN_INLINE_SUBJECT_CHARS = 200;
 
 export interface ContractViolation {
-  code: ViolationCode;
-  message: string;
-  remedy: string;
+  readonly code: ViolationCode;
+  readonly message: string;
+  readonly remedy: string;
 }
 
 export interface ContractInput {
-  prompt: string;
+  readonly prompt: string;
   /** Text piped on stdin, if any. This is how scope is supplied. */
-  scopeText: string | null;
+  readonly scopeText: string | null;
   /** Explicit --pass, or null to infer from the prompt. */
-  passKind: PassKind | null;
+  readonly passKind: PassKind | null;
   /** --max-checks override. */
-  maxChecks?: number | null;
+  readonly maxChecks?: number | null;
   /** --allow-unscoped: explicit, per-call opt-out of the scope rule. */
-  allowUnscoped?: boolean;
+  readonly allowUnscoped?: boolean;
 }
 
 export interface ContractDecision {
-  passKind: PassKind;
-  profile: PassProfile;
-  violations: ContractViolation[];
+  readonly passKind: PassKind;
+  readonly profile: PassProfile;
+  readonly violations: ContractViolation[];
   /** True when the invocation may proceed. */
-  ok: boolean;
+  readonly ok: boolean;
   /**
    * Which control this invocation actually switched off, or null when it relied on none.
    *
    * Only set when the bypass was load-bearing: passing `--allow-unscoped` alongside a
    * piped diff bypasses nothing and is not recorded as a bypass.
    */
-  bypass: BypassKind | null;
+  readonly bypass: BypassKind | null;
 }
 
 /**
@@ -348,15 +348,15 @@ export function extractVerdict(text: string | null | undefined): string | null {
 
 export interface ShapePromptOptions {
   /** The single falsifiable claim under attack. */
-  property: string;
-  profile: PassProfile;
+  readonly property: string;
+  readonly profile: PassProfile;
   /** Diff or other scope, as piped on stdin. */
-  scopeText: string | null;
+  readonly scopeText: string | null;
   /**
    * Tri-state: `undefined` defers to the profile, `null` means no cap, a number caps
    * explicitly. `??` alone would collapse "no cap" back into the profile default.
    */
-  wordCap?: number | null | undefined;
+  readonly wordCap?: number | null | undefined;
 }
 
 /**
@@ -408,19 +408,19 @@ export function shapeVerificationPrompt(options: ShapePromptOptions): string {
 // --------------------------------------------------------------------------
 
 export interface HeartbeatInput {
-  elapsedMs: number;
-  execCount: number;
-  verdict: string | null;
+  readonly elapsedMs: number;
+  readonly execCount: number;
+  readonly verdict: string | null;
   /** Minutes with no verdict before reporting. */
-  afterMinutes?: number;
+  readonly afterMinutes?: number;
   /** Exec calls with no verdict before reporting. */
-  afterExecs?: number;
+  readonly afterExecs?: number;
 }
 
 export interface HeartbeatReport {
-  shouldReport: boolean;
-  message: string | null;
-  triggeredBy: "minutes" | "execs" | null;
+  readonly shouldReport: boolean;
+  readonly message: string | null;
+  readonly triggeredBy: "minutes" | "execs" | null;
   /**
    * True when the agent looks blocked rather than merely slow.
    *
@@ -431,7 +431,7 @@ export interface HeartbeatReport {
    * "not converging" for it sends you off narrowing a property that was never the
    * problem.
    */
-  looksBlocked: boolean;
+  readonly looksBlocked: boolean;
 }
 
 export const DEFAULT_HEARTBEAT_MINUTES = 5;
@@ -499,16 +499,16 @@ export type BreachReason = KillReason;
 export type BypassKind = "unscoped" | "no-contract";
 
 export interface RunLedger {
-  jobId: string;
-  passKind: PassKind | null;
-  reasoning: string;
-  model: string;
-  durationMs: number | null;
+  readonly jobId: string;
+  readonly passKind: PassKind | null;
+  readonly reasoning: string;
+  readonly model: string;
+  readonly durationMs: number | null;
   /**
    * Tokens Codex reported actually spending, from its own `Token usage: total=` line.
    * null means it was never reported — NOT zero, and never a stand-in from elsewhere.
    */
-  tokensSpent: number | null;
+  readonly tokensSpent: number | null;
   /**
    * Cumulative INPUT tokens read off the Codex session file.
    *
@@ -519,16 +519,16 @@ export interface RunLedger {
    * — a 4.4x spread that was pure measurement artifact, on the field anyone would have
    * built a token ceiling from.
    */
-  cumulativeInputTokens: number | null;
-  execCount: number | null;
-  verdict: string | null;
-  verdictProduced: boolean;
-  scoped: boolean;
+  readonly cumulativeInputTokens: number | null;
+  readonly execCount: number | null;
+  readonly verdict: string | null;
+  readonly verdictProduced: boolean;
+  readonly scoped: boolean;
   /** Which contract control, if any, the caller switched off for this run. */
-  bypass: BypassKind | null;
-  timedOut: boolean;
+  readonly bypass: BypassKind | null;
+  readonly timedOut: boolean;
   /** Set when a guard stopped this run. See guards.ts. */
-  breachReason: BreachReason | null;
+  readonly breachReason: BreachReason | null;
 }
 
 /** How a run ended, in one token: a verdict, a breach, or nothing at all. */
