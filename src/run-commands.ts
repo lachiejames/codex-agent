@@ -211,8 +211,3 @@ export function killRun(runId: string): boolean {
   saveRun(run);
   return true;
 }
-
-/** Has this run finished a turn, one way or another? */
-export function isRunSettled(run: Run): boolean {
-  return run.status === "waiting" || isRunTerminal(run);
-}

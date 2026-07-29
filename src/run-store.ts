@@ -10,16 +10,7 @@
 // this one was proven. The tmux transport is gone; the extension is kept because existing
 // run artifacts on disk are named with it. See docs/SPEC.md.
 
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type { KillReason } from "./bounds.ts";
 import { config, type ReasoningEffort, type SandboxMode } from "./config.ts";
@@ -215,11 +206,6 @@ export function createRun(options: CreateRunOptions): Run {
   };
 }
 
-/** Is a run in a state where a Codex process should be running? */
-export function isRunActive(run: Run): boolean {
-  return run.status === "starting" || run.status === "running";
-}
-
 /**
  * Does this supervisor resume an existing thread, or start a new one?
  *
@@ -280,11 +266,6 @@ export function takeSteer(runId: string): string | null {
   } catch {
     return null;
   }
-}
-
-export function hasSteer(runId: string): boolean {
-  const path = runArtifactPath(runId, RUN_ARTIFACTS.steer);
-  return path !== null && existsSync(path);
 }
 
 // --------------------------------------------------------------------------
