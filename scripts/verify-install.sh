@@ -95,7 +95,7 @@ CLI=("$REPO/bin/codex-agent")
 
 run_exit() { "${CLI[@]}" "$@" >/dev/null 2>&1; echo $?; }
 
-code=$(run_exit start "Review the auth changes for security issues" --dry-run </dev/null)
+code=$(run_exit start "Review the auth changes for security issues" --timeout 10 --dry-run </dev/null)
 [ "$code" = "3" ] && ok "unscoped review REFUSED (exit 3)" \
                   || bad "unscoped review should exit 3, got $code"
 
@@ -104,24 +104,30 @@ code=$(printf 'diff --git a/x b/x\n+line\n' | run_exit start "Review:
 - b
 - c
 - d
-- e" --dry-run)
+- e" --timeout 10 --dry-run)
 [ "$code" = "3" ] && ok "over-broad review REFUSED (exit 3)" \
                   || bad "5-check review should exit 3, got $code"
 
-code=$(printf 'diff --git a/x b/x\n+line\n' | run_exit start "Review this" --dry-run)
+code=$(printf 'diff --git a/x b/x\n+line\n' | run_exit start "Review this" --timeout 10 --dry-run)
 [ "$code" = "0" ] && ok "scoped review ACCEPTED (exit 0)" \
                   || bad "scoped review should exit 0, got $code"
 
-code=$(run_exit start "Design a caching layer" --dry-run </dev/null)
+code=$(run_exit start "Design a caching layer" --timeout 45 --dry-run </dev/null)
 [ "$code" = "0" ] && ok "unscoped PLAN accepted — planning is allowed to be broad" \
                   || bad "plan should exit 0, got $code"
+
+# A bound a machine caller inherits silently is not a bound. Omitting it must REFUSE, not
+# fall back to a default — that is the whole point of deleting the defaults.
+code=$(run_exit start "Design a caching layer" --dry-run </dev/null)
+[ "$code" = "3" ] && ok "a launch with no --timeout is REFUSED (exit 3)" \
+                  || bad "missing --timeout should exit 3, got $code"
 
 # ---------------------------------------------------------------------------
 section "4. Codex is the brain, not the hands (read-only default)"
 
 for pass in plan review mechanical adversarial; do
   out=$(printf 'diff --git a/x b/x\n+line\n' | "${CLI[@]}" start --pass "$pass" \
-        --property "x holds" --dry-run --allow-unscoped 2>/dev/null)
+        --property "x holds" --timeout 10 --dry-run --allow-unscoped 2>/dev/null)
   if grep -q "Sandbox: read-only" <<<"$out"; then
     ok "--pass $pass runs read-only"
   else
@@ -129,7 +135,7 @@ for pass in plan review mechanical adversarial; do
   fi
 done
 
-out=$("${CLI[@]}" start --pass plan "Design a cache" -s workspace-write --dry-run 2>/dev/null </dev/null)
+out=$("${CLI[@]}" start --pass plan "Design a cache" --timeout 45 -s workspace-write --dry-run 2>/dev/null </dev/null)
 grep -q "Sandbox: workspace-write" <<<"$out" \
   && ok "an explicit -s workspace-write is still honoured" \
   || bad "explicit -s override did not take effect"
@@ -248,7 +254,7 @@ if [ "$DO_LIVE" = "1" ]; then
     started=$(date +%s)
     out=$("${CLI[@]}" start --pass review \
       --property "every exported function in the diff has an explicit return type" \
-      --timeout 6 --wait --strip-ansi < "$scope" 2>&1)
+      --timeout 6 --wait < "$scope" 2>&1)
     elapsed=$(( $(date +%s) - started ))
     verdict=$(grep -oE 'VERDICT: (CLEAN|BROKEN)' <<<"$out" | tail -1)
 
@@ -270,7 +276,7 @@ if [ "$DO_LIVE" = "1" ]; then
     # Asserted as NON-NULL rather than non-zero, because `execCount: 0` is the healthy
     # signature of a scoped pass (the shaped prompt tells the agent not to read other files)
     # while `null` means the measurement is dead. Conflating those two is the whole bug.
-    job_id=$(grep -oE '^Job started: [0-9a-f]+' <<<"$out" | head -1 | awk '{print $3}')
+    job_id=$(grep -oE '^Run started: [0-9a-f]+' <<<"$out" | head -1 | awk '{print $3}')
     if [ -z "$job_id" ]; then
       bad "could not read a job id out of the live run — cannot verify metric liveness"
     else
@@ -291,20 +297,6 @@ if [ "$DO_LIVE" = "1" ]; then
       fi
     fi
 
-    # Anchored on the CLI's own report line, not on the word appearing anywhere in $out.
-    #
-    # $out contains the whole transcript, and the transcript contains the diff under review
-    # — so a bare `grep -q BLOCKED` also matched the *source being reviewed*. It went red
-    # the moment src/guards.ts introduced the string "is BLOCKED on an interactive Codex
-    # prompt", reporting a blocked agent for a run that had just returned VERDICT: CLEAN in
-    # 28s. A check that fails on the vocabulary of the code it is testing is worse than no
-    # check: it teaches you to ignore the gate.
-    #
-    # The guard's real report is printed to stderr as `contract: job <id> is BLOCKED ...`,
-    # always at column 0, whereas every diff line carries a +/-/space prefix.
-    if grep -qE '^contract: .*BLOCKED' <<<"$out"; then
-      bad "agent was blocked on an interactive prompt — is this dir trusted in ~/.codex/config.toml?"
-    fi
   fi
   rm -f "$scope"
 fi

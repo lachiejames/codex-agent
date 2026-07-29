@@ -1,0 +1,67 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Ported from ~/dev/personal/slopweaver. Bug-catching categories only — formatting is Biome's job.
+  //
+  // Two deliberate deviations from the source config, both because this repo is a Node/Bun CLI with
+  // no browser surface at all:
+  //   * the `react` and `jsx-a11y` plugins are dropped. slopweaver keeps them enabled "for when React
+  //     lands"; React will never land here, so they are noise rather than latent value.
+  //   * `unicorn/require-post-message-target-origin` is not overridden. That override exists in
+  //     slopweaver to stop the rule firing on Slack's `chat.postMessage`; there is no Slack SDK here.
+  //
+  // The `vitest` plugin is kept even though this repo runs `bun:test`: its focused/disabled-test rules
+  // match on `it.only` / `it.skip` syntax, which bun:test shares. It is a second line of defence behind
+  // scripts/check-test-discipline.ts.
+  "categories": { "correctness": "warn", "perf": "warn", "suspicious": "warn" },
+  "env": { "es2022": true, "node": true },
+  "ignorePatterns": ["**/coverage/**", "**/dist/**", "**/node_modules/**"],
+  "overrides": [
+    {
+      // These two files exist to strip terminal control characters out of scraped tmux panes, so
+      // matching control characters IS their purpose and `no-control-regex` cannot be satisfied
+      // without breaking them.
+      //
+      // Both are slated for deletion once the `codex exec --json` transport replaces the TUI —
+      // the whole reason they exist is that a scraped pane could not be trusted. DELETE THIS
+      // OVERRIDE ALONG WITH THEM; if it outlives them, something reintroduced pane scraping.
+      "files": ["src/output-cleaner.ts", "src/session-parser.ts"],
+      "rules": { "no-control-regex": "allow" }
+    },
+    {
+      "files": ["**/*.test.ts"],
+      "rules": {
+        // Tests deliberately split string literals so a scanner/checker under test doesn't match its
+        // OWN fixtures — that concat is intentional, not useless.
+        "no-useless-concat": "allow",
+        "require-await": "allow",
+        "typescript/no-explicit-any": "allow",
+        "typescript/no-non-null-assertion": "allow"
+      }
+    }
+  ],
+  "plugins": ["eslint", "import", "node", "oxc", "promise", "typescript", "unicorn", "vitest"],
+  "rules": {
+    "array-callback-return": "warn",
+    "import/no-named-as-default": "allow",
+    "import/no-unassigned-import": "allow",
+    "no-await-in-loop": "allow",
+    "no-constructor-return": "warn",
+    // Duplicate imports are merged by Biome's organizeImports; unused locals/params are caught by tsc
+    // (noUnusedLocals/noUnusedParameters) and unused imports by Biome — no triple coverage.
+    "no-duplicate-imports": "allow",
+    "no-fallthrough": "warn",
+    "no-self-compare": "warn",
+    "no-unused-vars": "allow",
+    // Off by design: this codebase folds immutable state (`{...metrics, eventCount: n + 1}`), which is
+    // deliberate copy-on-write. The rule's Object.assign autofix mutates and would break that idiom.
+    "oxc/no-map-spread": "allow",
+    "unicorn/consistent-function-scoping": "allow",
+    "unicorn/no-negation-in-equality-check": "warn",
+    // A CLI whose exit codes are load-bearing (3 = contract refusal, 4 = unusable result) calls
+    // process.exit deliberately and often. See docs/SPEC.md behaviour 10.
+    "unicorn/no-process-exit": "allow",
+    "unicorn/no-useless-promise-resolve-reject": "warn",
+    "vitest/no-disabled-tests": "warn",
+    "vitest/no-focused-tests": "error"
+  }
+}

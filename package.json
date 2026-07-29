@@ -1,18 +1,5 @@
 {
-  "name": "codex-agent",
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "build": "bun build src/cli.ts --outdir dist --target node",
-    "format": "biome check --write . && prettier --write .",
-    "format:check": "biome check . && prettier --check .",
-    "knip": "knip",
-    "lint": "oxlint --deny-warnings",
-    "prepare": "lefthook install || true",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "validate": "bun run lint && bun run format:check && bun run typecheck && bun test"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
     "@types/bun": "^1.3.14",
@@ -23,5 +10,19 @@
     "prettier": "3.9.5",
     "typescript": "5.9.3"
   },
-  "dependencies": {}
+  "name": "codex-agent",
+  "scripts": {
+    "build": "bun build src/cli.ts --outdir dist --target node",
+    "check:tests": "bun src/check-test-discipline/index.ts",
+    "format": "biome check --write . && prettier --write .",
+    "format:check": "biome check . && prettier --check .",
+    "knip": "knip",
+    "lint": "oxlint --deny-warnings",
+    "prepare": "lefthook install || true",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "validate": "bun run lint && bun run format:check && bun run typecheck && bun run check:tests && bun test"
+  },
+  "type": "module",
+  "version": "1.0.0"
 }

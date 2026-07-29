@@ -1,15 +1,15 @@
 // End-to-end tests for the invocation contract as the CLI actually enforces it.
 //
-// contract.test.ts covers the decision logic in isolation. These spawn the real CLI
-// so the wiring is covered too: stdin ingestion, exit codes, and the fact that both
-// launch paths (`start` and the bare-prompt fall-through) go through the same gate.
+// contract.test.ts covers the decision logic in isolation. These spawn the real CLI so the wiring
+// is covered too: stdin ingestion, the required bound, exit codes, and the fact that there is
+// exactly one launch path and no way around it.
 //
-// All of these use --dry-run, so no Codex agent or tmux session is created.
+// All of these use --dry-run, so no Codex process is ever created.
 
+import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 
 /** Contract refusal. Distinct from a crash (1) and from a no-verdict run (4). */
 const EXIT_CONTRACT_REFUSAL = 3;
@@ -25,17 +25,17 @@ function runCli(args: string[], stdin: string | null) {
     cmd: [process.execPath, "src/cli.ts", ...args],
     cwd: process.cwd(),
     env: { ...process.env, HOME: makeHome() },
+    stderr: "pipe",
     // A string stdin is a pipe; "ignore" gives a non-TTY empty stream, which is the
     // `< /dev/null` case and must read as "no scope supplied".
     stdin: stdin === null ? "ignore" : new TextEncoder().encode(stdin),
     stdout: "pipe",
-    stderr: "pipe",
   });
 
   return {
     exitCode: result.exitCode,
-    stdout: new TextDecoder().decode(result.stdout),
     stderr: new TextDecoder().decode(result.stderr),
+    stdout: new TextDecoder().decode(result.stdout),
   };
 }
 
@@ -48,9 +48,70 @@ const SAMPLE_DIFF = [
   "+await withRetries(4, () => client.chat.postMessage(payload));",
 ].join("\n");
 
-describe("CLI invocation contract", () => {
+const PASS_KINDS = ["plan", "review", "mechanical", "adversarial"] as const;
+
+describe("the required bound", () => {
+  test("omitting --timeout is a contract refusal, not an inherited default", () => {
+    // The newest rule, and the one the whole transport rewrite turns on. A default a machine
+    // caller inherits silently is not a bound: a 10-minute review and a 60-minute deep pass end
+    // up sharing one accidental number, and only the caller knows which this is.
+    const result = runCli(["start", "Design a caching layer for the API", "--dry-run"], null);
+
+    expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
+    expect(result.stderr).toContain("--timeout <minutes> is required and has no default");
+    // Refused before anything was built, so no prompt was previewed and nothing was spent.
+    expect(result.stdout).not.toContain("Prompt Preview");
+  });
+
+  test("the bound is refused for an otherwise perfect invocation too", () => {
+    // Checked first on purpose, so the refusal reads the same whether or not the rest of the
+    // invocation is well formed.
+    const result = runCli(["start", "--pass", "review", "--property", "x holds", "--dry-run"], SAMPLE_DIFF);
+
+    expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
+    expect(result.stderr).toContain("--timeout <minutes> is required and has no default");
+  });
+
+  test("the bound comes from --timeout alone, for every pass", () => {
+    // It used to come from the pass profile, which meant four accidental numbers instead of one
+    // stated one. Every pass now reports exactly what the caller asked for.
+    for (const pass of PASS_KINDS) {
+      const result = runCli(
+        ["start", "--pass", pass, "--property", "x holds", "--timeout", "12", "--dry-run"],
+        SAMPLE_DIFF,
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Bound: 12m per turn");
+    }
+  });
+
+  test("a different --timeout gives a different bound", () => {
+    const result = runCli(
+      ["start", "--pass", "review", "--property", "x holds", "--timeout", "3", "--dry-run"],
+      SAMPLE_DIFF,
+    );
+
+    expect(result.stdout).toContain("Bound: 3m per turn");
+  });
+
+  test("a nonsense --timeout is rejected rather than coerced", () => {
+    const result = runCli(
+      ["start", "--pass", "review", "--property", "x holds", "--timeout", "0", "--dry-run"],
+      SAMPLE_DIFF,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Invalid timeout (minutes): 0");
+  });
+});
+
+describe("the scope rule", () => {
   test("refuses an unscoped review with a distinct exit code and an actionable remedy", () => {
-    const result = runCli(["start", "Review the auth changes for security issues", "--dry-run"], null);
+    const result = runCli(
+      ["start", "Review the auth changes for security issues", "--timeout", "10", "--dry-run"],
+      null,
+    );
 
     expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
     expect(result.stderr).toContain("Refusing to run");
@@ -60,57 +121,41 @@ describe("CLI invocation contract", () => {
   });
 
   test("accepts the same review once the diff arrives on stdin", () => {
-    const result = runCli(["start", "Review these changes", "--dry-run"], SAMPLE_DIFF);
+    const result = runCli(["start", "Review these changes", "--timeout", "10", "--dry-run"], SAMPLE_DIFF);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Scoped by stdin: yes");
     expect(result.stdout).toContain("=== DIFF ===");
   });
 
-  test("the bare-prompt fall-through cannot bypass the gate", () => {
-    // `codex-agent "review ..."` with no subcommand is a supported form, and was a
-    // second, ungated path into Codex before both routed through one launcher.
-    const result = runCli(["Review the auth module", "--dry-run"], null);
+  test("empty stdin counts as unscoped, not as scope", () => {
+    const result = runCli(["start", "Verify the migration", "--timeout", "10", "--dry-run"], "   \n  \n");
 
     expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
     expect(result.stderr).toContain("Refusing to run");
   });
 
-  test("empty stdin counts as unscoped, not as scope", () => {
-    const result = runCli(["start", "Verify the migration", "--dry-run"], "   \n  \n");
-
-    expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
-  });
-
-  test("--allow-unscoped no longer waves through a one-line prompt", () => {
-    // Ratcheted: the bypass used to be honoured here, which made it a general way past
-    // the scope rule instead of a narrow exception.
-    const result = runCli(
-      ["start", "Review the whole tree", "--dry-run", "--allow-unscoped"],
-      null,
-    );
-
-    expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
-    expect(result.stderr).toContain("not honoured here");
-  });
-
-  test("--allow-unscoped is honoured for the documented P3 shape, and recorded", () => {
-    const plan =
-      "This plan survives contact with production: migrate the outbound queue behind a " +
-      "feature flag, backfill existing rows in batches of 500 with a resumable cursor, then " +
-      "flip the flag and retire the old path once the backlog drains and error rate holds.";
-
-    const result = runCli(
-      ["start", "--pass", "adversarial", "--property", plan, "--dry-run", "--allow-unscoped"],
-      null,
-    );
+  test("a plan pass needs no scope and keeps xhigh", () => {
+    const result = runCli(["start", "Design a caching layer for the API", "--timeout", "45", "--dry-run"], null);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Scoped by stdin: no");
-    // A bypass that is not visible afterwards is indistinguishable from no contract.
-    expect(result.stderr).toContain("Recorded as a bypass");
+    expect(result.stdout).toContain("Pass: plan");
+    expect(result.stdout).toContain("Reasoning: xhigh");
   });
 
+  test("there is no second, ungated way into Codex", () => {
+    // `codex-agent "review ..."` with no subcommand used to be a supported form, and was a
+    // second path into Codex before both routed through one launcher. It is now not a launch path
+    // at all: an unknown command costs a message rather than a bounded-but-real spend.
+    const result = runCli(["Review the auth module", "--timeout", "10", "--dry-run"], null);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Unknown command: Review");
+    expect(result.stdout).not.toContain("Prompt Preview");
+  });
+});
+
+describe("the breadth guard", () => {
   test("refuses the enumerated-checklist shape that ran 1h50m", () => {
     const prompt = [
       "Security review the changes. Check:",
@@ -121,7 +166,7 @@ describe("CLI invocation contract", () => {
       "- SQL/command injection",
     ].join("\n");
 
-    const result = runCli(["start", prompt, "--dry-run"], SAMPLE_DIFF);
+    const result = runCli(["start", prompt, "--timeout", "10", "--dry-run"], SAMPLE_DIFF);
 
     expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
     expect(result.stderr).toContain("5 independent checks");
@@ -138,7 +183,7 @@ describe("CLI invocation contract", () => {
     ].join("\n");
 
     const result = runCli(
-      ["start", "--pass", "review", "--property", "no value is dropped", "--dry-run"],
+      ["start", "--pass", "review", "--property", "no value is dropped", "--timeout", "10", "--dry-run"],
       bigDiff,
     );
 
@@ -146,15 +191,70 @@ describe("CLI invocation contract", () => {
     expect(result.stdout).toContain("Prompt Preview");
   });
 
-  test("a plan pass needs no scope and keeps xhigh", () => {
-    const result = runCli(["start", "Design a caching layer for the API", "--dry-run"], null);
+  test("--max-checks raises the limit for a caller who is certain", () => {
+    const prompt = ["Review the changes. Check:", "- one", "- two", "- three", "- four"].join("\n");
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Pass: plan");
-    expect(result.stdout).toContain("Reasoning: xhigh");
+    expect(runCli(["start", prompt, "--timeout", "10", "--dry-run"], SAMPLE_DIFF).exitCode).toBe(EXIT_CONTRACT_REFUSAL);
+    expect(runCli(["start", prompt, "--max-checks", "4", "--timeout", "10", "--dry-run"], SAMPLE_DIFF).exitCode).toBe(
+      0,
+    );
+  });
+});
+
+describe("the bypass ratchet", () => {
+  test("--allow-unscoped does not wave through a one-line prompt", () => {
+    // Ratcheted: the bypass used to be honoured here, which made it a general way past
+    // the scope rule instead of a narrow exception.
+    const result = runCli(["start", "Review the whole tree", "--timeout", "10", "--dry-run", "--allow-unscoped"], null);
+
+    expect(result.exitCode).toBe(EXIT_CONTRACT_REFUSAL);
+    expect(result.stderr).toContain("not honoured here");
   });
 
-  test("shapes a review into the one-property form and states its bound", () => {
+  test("--allow-unscoped is honoured for the documented P3 shape, and recorded", () => {
+    const plan =
+      "This plan survives contact with production: migrate the outbound queue behind a " +
+      "feature flag, backfill existing rows in batches of 500 with a resumable cursor, then " +
+      "flip the flag and retire the old path once the backlog drains and error rate holds.";
+
+    const result = runCli(
+      ["start", "--pass", "adversarial", "--property", plan, "--timeout", "20", "--dry-run", "--allow-unscoped"],
+      null,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Scoped by stdin: no");
+    expect(result.stdout).toContain("Bypass: unscoped");
+    // A bypass that is not visible afterwards is indistinguishable from no contract.
+    expect(result.stderr).toContain("Recorded as a bypass");
+  });
+
+  test("--allow-unscoped alongside a piped diff bypasses nothing, and is not recorded as one", () => {
+    const result = runCli(
+      ["start", "--pass", "review", "--property", "x holds", "--timeout", "10", "--dry-run", "--allow-unscoped"],
+      SAMPLE_DIFF,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Bypass: none");
+    expect(result.stderr).not.toContain("Recorded as a bypass");
+  });
+
+  test("--no-contract is a real escape hatch, and says it was used", () => {
+    const result = runCli(
+      ["start", "Review everything everywhere", "--timeout", "10", "--dry-run", "--no-contract"],
+      null,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("Attack ONE property.");
+    expect(result.stdout).toContain("Bypass: no-contract");
+    expect(result.stderr).toContain("every guard in contract.ts is off for this run");
+  });
+});
+
+describe("prompt shaping and profile resolution", () => {
+  test("shapes a review into the one-property form", () => {
     const result = runCli(
       [
         "start",
@@ -162,6 +262,8 @@ describe("CLI invocation contract", () => {
         "adversarial",
         "--property",
         "the retry wrapper cannot double-post",
+        "--timeout",
+        "20",
         "--dry-run",
       ],
       SAMPLE_DIFF,
@@ -173,62 +275,39 @@ describe("CLI invocation contract", () => {
     expect(result.stdout).toContain('"VERDICT: BROKEN"');
     expect(result.stdout).toContain("Answer in under 400 words.");
     expect(result.stdout).toContain("Do not read other files.");
-    expect(result.stdout).toContain("Wall-clock bound: 20m");
-  });
-
-  test("every pass reports a finite wall-clock bound", () => {
-    // The 2026-07-26 run had none. There must be no way to launch without one.
-    for (const [pass, expected] of [
-      ["plan", "45m"],
-      ["review", "10m"],
-      ["mechanical", "5m"],
-      ["adversarial", "20m"],
-    ] as const) {
-      const result = runCli(
-        ["start", "--pass", pass, "--property", "x holds", "--dry-run", "--allow-unscoped"],
-        SAMPLE_DIFF,
-      );
-      expect(result.stdout).toContain(`Wall-clock bound: ${expected}`);
-    }
+    expect(result.stdout).toContain("Bound: 20m per turn");
   });
 
   test("every pass runs read-only unless write is explicitly requested", () => {
     // Codex is the brain, not the hands. Write access must never be inferred.
-    for (const pass of ["plan", "review", "mechanical", "adversarial"] as const) {
+    for (const pass of PASS_KINDS) {
       const result = runCli(
-        ["start", "--pass", pass, "--property", "x holds", "--dry-run", "--allow-unscoped"],
+        ["start", "--pass", pass, "--property", "x holds", "--timeout", "10", "--dry-run"],
         SAMPLE_DIFF,
       );
+
       expect(result.stdout).toContain("Sandbox: read-only");
     }
   });
 
   test("an explicit -s workspace-write is honoured", () => {
     const result = runCli(
-      ["start", "--pass", "plan", "Design a cache", "-s", "workspace-write", "--dry-run"],
+      ["start", "--pass", "plan", "Design a cache", "-s", "workspace-write", "--timeout", "45", "--dry-run"],
       null,
     );
 
     expect(result.stdout).toContain("Sandbox: workspace-write");
   });
 
-  test("--timeout overrides the profile bound", () => {
-    const result = runCli(
-      ["start", "--pass", "review", "--property", "x holds", "--timeout", "3", "--dry-run"],
-      SAMPLE_DIFF,
-    );
-
-    expect(result.stdout).toContain("Wall-clock bound: 3m");
-  });
-
   test("every pass reports gpt-5.6-sol at xhigh through the real CLI", () => {
     // The end-to-end form of the guarantee: not just the profile table, but what the CLI
     // actually resolves and would hand to `codex` via -c model / -c model_reasoning_effort.
-    for (const pass of ["plan", "review", "mechanical", "adversarial"] as const) {
+    for (const pass of PASS_KINDS) {
       const result = runCli(
-        ["start", "--pass", pass, "--property", "x holds", "--dry-run", "--allow-unscoped"],
+        ["start", "--pass", pass, "--property", "x holds", "--timeout", "10", "--dry-run"],
         SAMPLE_DIFF,
       );
+
       expect(result.stdout).toContain("Reasoning: xhigh");
       expect(result.stdout).toContain("Model: gpt-5.6-sol");
     }
@@ -236,7 +315,7 @@ describe("CLI invocation contract", () => {
 
   test("an explicit -r still overrides, so the escape hatch remains", () => {
     const result = runCli(
-      ["start", "--pass", "review", "--property", "x holds", "-r", "low", "--dry-run"],
+      ["start", "--pass", "review", "--property", "x holds", "-r", "low", "--timeout", "10", "--dry-run"],
       SAMPLE_DIFF,
     );
 
@@ -245,25 +324,15 @@ describe("CLI invocation contract", () => {
 
   test("--word-cap 0 removes the answer cap", () => {
     const result = runCli(
-      ["start", "--pass", "review", "--property", "x holds", "--word-cap", "0", "--dry-run"],
+      ["start", "--pass", "review", "--property", "x holds", "--word-cap", "0", "--timeout", "10", "--dry-run"],
       SAMPLE_DIFF,
     );
 
     expect(result.stdout).not.toContain("Answer in under");
   });
 
-  test("--no-contract is a real escape hatch", () => {
-    const result = runCli(
-      ["start", "Review everything everywhere", "--dry-run", "--no-contract"],
-      null,
-    );
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).not.toContain("Attack ONE property.");
-  });
-
   test("rejects an unknown pass kind instead of silently inferring one", () => {
-    const result = runCli(["start", "x", "--pass", "nonsense", "--dry-run"], SAMPLE_DIFF);
+    const result = runCli(["start", "x", "--pass", "nonsense", "--timeout", "10", "--dry-run"], SAMPLE_DIFF);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("Invalid pass kind");
@@ -271,7 +340,7 @@ describe("CLI invocation contract", () => {
 
   test("--property alone is a sufficient prompt", () => {
     const result = runCli(
-      ["start", "--pass", "review", "--property", "the cache never returns stale rows", "--dry-run"],
+      ["start", "--pass", "review", "--property", "the cache never returns stale rows", "--timeout", "10", "--dry-run"],
       SAMPLE_DIFF,
     );
 
@@ -280,48 +349,29 @@ describe("CLI invocation contract", () => {
   });
 
   test("start with neither prompt nor property still errors", () => {
-    const result = runCli(["start", "--dry-run"], SAMPLE_DIFF);
+    const result = runCli(["start", "--timeout", "10", "--dry-run"], SAMPLE_DIFF);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("No prompt provided");
   });
+});
 
-  test("the ledger command runs with no jobs", () => {
-    const result = runCli(["ledger"], null);
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("No runs");
-  });
-
-  test("the ledger emits a versioned JSON envelope", () => {
-    const result = runCli(["ledger", "--json"], null);
-    const payload = JSON.parse(result.stdout);
-
-    expect(result.exitCode).toBe(0);
-    // v2 because `totalTokens` was replaced. It used to carry either true spend or
-    // cumulative input depending on which was available, so consumers reading it as a cost
-    // were sometimes wrong by 4x — a silent change would have left them wrong quietly.
-    expect(payload.schema_version).toBe("codex-agent.ledger.v2");
-    expect(Array.isArray(payload.runs)).toBe(true);
-  });
-
-  test("the ledger reports spend and cumulative input as distinct fields", () => {
-    const result = runCli(["ledger", "--json", "--limit", "5"], null);
-    const payload = JSON.parse(result.stdout);
-
-    for (const run of payload.runs) {
-      expect(run).not.toHaveProperty("totalTokens");
-      expect(run).toHaveProperty("tokensSpent");
-      expect(run).toHaveProperty("cumulativeInputTokens");
-    }
-  });
-
+describe("discoverability", () => {
   test("help documents the contract, so the failure mode is discoverable", () => {
     const result = runCli(["--help"], null);
 
+    expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Invocation contract");
     expect(result.stdout).toContain("--pass");
     expect(result.stdout).toContain("--property");
     expect(result.stdout).toContain("REFUSED");
+    expect(result.stdout).toContain("--timeout is REQUIRED and has no default");
+  });
+
+  test("the ledger command runs with no runs at all", () => {
+    const result = runCli(["ledger"], null);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("No runs");
   });
 });

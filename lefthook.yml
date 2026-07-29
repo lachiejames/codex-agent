@@ -1,0 +1,23 @@
+# Git hooks (installed by `lefthook install`, run automatically). Ported from
+# ~/dev/personal/slopweaver, with yarn/node swapped for bun.
+#
+#   pre-commit — auto-format the staged files (Biome for code/JSON, Prettier for docs) and re-stage
+#                them, so every commit is already formatted + import-sorted the way CI checks.
+#   pre-push   — run the full local gate (`bun run validate`), the same bar CI runs, so a red tree
+#                never reaches CI. Bypass in an emergency with `git push --no-verify`.
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{js,jsx,ts,tsx,json,jsonc}"
+      run: bunx biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+    prettier:
+      glob: "*.{md,yaml,yml}"
+      run: bunx prettier --write --ignore-unknown {staged_files}
+      stage_fixed: true
+
+pre-push:
+  commands:
+    validate:
+      run: bun run validate

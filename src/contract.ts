@@ -20,7 +20,8 @@
 // effort to make review terminate would trade away the exact capability being paid
 // for. The fix is to bound the *question*, not the thinking.
 
-import { config, type ReasoningEffort, type SandboxMode } from "./config.ts";
+import type { KillReason } from "./bounds.ts";
+import type { ReasoningEffort, SandboxMode } from "./config.ts";
 
 // --------------------------------------------------------------------------
 // Pass kinds — effort tiering per pass, not one global dial
@@ -39,7 +40,6 @@ export interface PassProfile {
    * the body. Planning and reviewing are both pure reads, so no profile grants write.
    */
   sandbox: SandboxMode;
-  timeoutMinutes: number;
   /** Word cap on the answer. An unbounded answer invites exploration over verdicts. */
   wordCap: number | null;
   /** Require a diff (or other scope) on stdin. */
@@ -52,29 +52,16 @@ export interface PassProfile {
 }
 
 export const PASS_PROFILES: Record<PassKind, PassProfile> = {
-  // Planning converged fine at xhigh in 25 minutes. Left deliberately broad.
-  plan: {
-    kind: "plan",
-    sandbox: "read-only",
+  // Hardest pass. Keeps xhigh; gets the longest leash of any scoped pass.
+  adversarial: {
+    description: "Try hard to break one falsifiable claim about a supplied diff.",
+    kind: "adversarial",
+    maxChecks: 1,
     reasoning: "xhigh",
-    timeoutMinutes: 45,
-    wordCap: null,
-    requiresScope: false,
-    maxChecks: Number.POSITIVE_INFINITY,
-    requiresVerdict: false,
-    description: "Design/plan a single artifact. Broad by nature; converges on one output.",
-  },
-  // The pass that failed. Every bound here is set from the 51s run that worked.
-  review: {
-    kind: "review",
-    sandbox: "read-only",
-    reasoning: "xhigh",
-    timeoutMinutes: 10,
-    wordCap: 300,
     requiresScope: true,
-    maxChecks: 3,
     requiresVerdict: true,
-    description: "Attack a specific property of a supplied diff. Must reach CLEAN or BROKEN.",
+    sandbox: "read-only",
+    wordCap: 400,
   },
   // Was "medium" on the theory that pattern-matching does not need xhigh. Raised to
   // xhigh because this tool is used for thinking, not for cheap bulk work, and a pass
@@ -82,27 +69,37 @@ export const PASS_PROFILES: Record<PassKind, PassProfile> = {
   // check and quietly get a worse thinker than every other pass. If cost ever matters
   // more than depth, lower it per call with -r, explicitly and visibly.
   mechanical: {
-    kind: "mechanical",
-    sandbox: "read-only",
-    reasoning: "xhigh",
-    timeoutMinutes: 5,
-    wordCap: 200,
-    requiresScope: true,
-    maxChecks: 10,
-    requiresVerdict: true,
     description: "Mechanical house-rule/pattern checks against a supplied diff.",
-  },
-  // Hardest pass. Keeps xhigh; gets the longest leash of any scoped pass.
-  adversarial: {
-    kind: "adversarial",
-    sandbox: "read-only",
+    kind: "mechanical",
+    maxChecks: 10,
     reasoning: "xhigh",
-    timeoutMinutes: 20,
-    wordCap: 400,
     requiresScope: true,
-    maxChecks: 1,
     requiresVerdict: true,
-    description: "Try hard to break one falsifiable claim about a supplied diff.",
+    sandbox: "read-only",
+    wordCap: 200,
+  },
+  // Planning converged fine at xhigh in 25 minutes. Left deliberately broad.
+  // No bound lives here: --timeout is required per invocation. See docs/SPEC.md behaviour 4.
+  plan: {
+    description: "Design/plan a single artifact. Broad by nature; converges on one output.",
+    kind: "plan",
+    maxChecks: Number.POSITIVE_INFINITY,
+    reasoning: "xhigh",
+    requiresScope: false,
+    requiresVerdict: false,
+    sandbox: "read-only",
+    wordCap: null,
+  },
+  // The pass that failed. Every bound here is set from the 51s run that worked.
+  review: {
+    description: "Attack a specific property of a supplied diff. Must reach CLEAN or BROKEN.",
+    kind: "review",
+    maxChecks: 3,
+    reasoning: "xhigh",
+    requiresScope: true,
+    requiresVerdict: true,
+    sandbox: "read-only",
+    wordCap: 300,
   },
 };
 
@@ -163,10 +160,7 @@ export function countEnumeratedChecks(prompt: string): number {
 // Contract evaluation
 // --------------------------------------------------------------------------
 
-export type ViolationCode =
-  | "unscoped_verification"
-  | "excessive_breadth"
-  | "unratcheted_bypass";
+export type ViolationCode = "unscoped_verification" | "excessive_breadth" | "unratcheted_bypass";
 
 /**
  * Minimum inline subject length before `--allow-unscoped` is honoured.
@@ -248,32 +242,27 @@ export function evaluateContract(input: ContractInput): ContractDecision {
   if (bypassIsLoadBearing) {
     const reasons: string[] = [];
     if (input.passKind === null) {
-      reasons.push(
-        "the pass was inferred rather than named — add --pass " + passKind + " to say which lane you mean"
-      );
+      reasons.push("the pass was inferred rather than named — add --pass " + passKind + " to say which lane you mean");
     }
     if (input.prompt.trim().length < MIN_INLINE_SUBJECT_CHARS) {
       reasons.push(
         `the subject is only ${input.prompt.trim().length} characters, under the ` +
           `${MIN_INLINE_SUBJECT_CHARS}-character floor — supply the material inline ` +
-          "(a plan, a spec, the text under attack) or pipe a diff instead"
+          "(a plan, a spec, the text under attack) or pipe a diff instead",
       );
     }
 
     if (reasons.length > 0) {
       violations.push({
         code: "unratcheted_bypass",
-        message:
-          "--allow-unscoped is not honoured here: " +
-          reasons.join("; and ") +
-          ".",
+        message: "--allow-unscoped is not honoured here: " + reasons.join("; and ") + ".",
         remedy:
-          "--allow-unscoped means \"the scope is not a diff\", not \"there is no scope\". Its one\n" +
+          '--allow-unscoped means "the scope is not a diff", not "there is no scope". Its one\n' +
           "  documented use is the P3 stress-test, where the plan under attack is supplied inline:\n" +
           "    codex-agent start --pass adversarial --allow-unscoped \\\n" +
-          "      --property \"This plan survives contact with production: <the whole plan>\"\n" +
+          '      --property "This plan survives contact with production: <the whole plan>"\n' +
           "  Otherwise pipe the diff:\n" +
-          "    git diff origin/main...HEAD -- path | codex-agent start \"...\" --pass " +
+          '    git diff origin/main...HEAD -- path | codex-agent start "..." --pass ' +
           passKind +
           "\n  Every honoured bypass is recorded and shows up in `codex-agent ledger`.",
       });
@@ -294,7 +283,7 @@ export function evaluateContract(input: ContractInput): ContractDecision {
         `Refusing to run: an unscoped verification has no stopping condition.`,
       remedy:
         "Pipe the diff:\n" +
-        "  git diff origin/main...HEAD -- path/a path/b | codex-agent start \"...\" --pass " +
+        '  git diff origin/main...HEAD -- path/a path/b | codex-agent start "..." --pass ' +
         passKind +
         "\n" +
         "If the scope genuinely is the whole tree, pass --allow-unscoped to say so explicitly.",
@@ -312,7 +301,7 @@ export function evaluateContract(input: ContractInput): ContractDecision {
         `pass is ${maxChecks}. Refusing to run.`,
       remedy:
         "Fan out instead — one property per call, run in parallel:\n" +
-        "  for prop in ...; do git diff ... | codex-agent start \"PROPERTY: $prop\" --pass " +
+        '  for prop in ...; do git diff ... | codex-agent start "PROPERTY: $prop" --pass ' +
         passKind +
         "; done\n" +
         "N properties in one call have no joint stopping condition. That is the shape " +
@@ -322,18 +311,16 @@ export function evaluateContract(input: ContractInput): ContractDecision {
   }
 
   return {
+    bypass: bypassIsLoadBearing ? "unscoped" : null,
+    ok: violations.length === 0,
     passKind,
     profile,
     violations,
-    ok: violations.length === 0,
-    bypass: bypassIsLoadBearing ? "unscoped" : null,
   };
 }
 
 export function formatViolations(violations: ContractViolation[]): string {
-  return violations
-    .map((violation) => `contract: ${violation.message}\n\n${violation.remedy}`)
-    .join("\n\n---\n\n");
+  return violations.map((violation) => `contract: ${violation.message}\n\n${violation.remedy}`).join("\n\n---\n\n");
 }
 
 // --------------------------------------------------------------------------
@@ -469,7 +456,7 @@ export function formatElapsed(ms: number): string {
  */
 export function evaluateHeartbeat(input: HeartbeatInput): HeartbeatReport {
   if (input.verdict) {
-    return { shouldReport: false, message: null, triggeredBy: null, looksBlocked: false };
+    return { looksBlocked: false, message: null, shouldReport: false, triggeredBy: null };
   }
 
   const afterMinutes = input.afterMinutes ?? DEFAULT_HEARTBEAT_MINUTES;
@@ -479,7 +466,7 @@ export function evaluateHeartbeat(input: HeartbeatInput): HeartbeatReport {
   const byMinutes = input.elapsedMs >= afterMinutes * 60_000;
 
   if (!byExecs && !byMinutes) {
-    return { shouldReport: false, message: null, triggeredBy: null, looksBlocked: false };
+    return { looksBlocked: false, message: null, shouldReport: false, triggeredBy: null };
   }
 
   // An agent that has made no tool calls at all after minutes of wall clock is not
@@ -493,87 +480,11 @@ export function evaluateHeartbeat(input: HeartbeatInput): HeartbeatReport {
       `no verdict yet. Narrow the property or supply the diff.`;
 
   return {
+    looksBlocked,
+    message,
     shouldReport: true,
     triggeredBy: byExecs ? "execs" : "minutes",
-    message,
-    looksBlocked,
   };
-}
-
-/**
- * Patterns that mean Codex is waiting on a human, not thinking.
- *
- * The wait loop already watched pane output for context-window exhaustion; these are
- * the same class of problem — a run that will never finish on its own and should fail
- * loudly and immediately rather than consume its entire wall-clock bound in silence.
- */
-/** Mirrors state.ts BlockerKind. Kept as a string union to avoid a circular import. */
-export type BlockingPromptKind = "auth" | "onboarding" | "permission";
-
-const BLOCKING_PROMPT_PATTERNS: ReadonlyArray<{
-  needle: string;
-  kind: BlockingPromptKind;
-  hint: string;
-}> = [
-  {
-    needle: "doyoutrustthecontentsofthisdirectory",
-    kind: "onboarding",
-    hint:
-      'Codex is asking whether to trust the working directory. Trust is matched by exact\n' +
-      '  path, not by prefix, so trusting a parent does not cover a new repo. Add to\n' +
-      '  ~/.codex/config.toml:\n' +
-      '    [projects."<cwd>"]\n' +
-      '    trust_level = "trusted"',
-  },
-  {
-    needle: "allowcommand",
-    kind: "permission",
-    hint:
-      "Codex is waiting on per-command approval. Launch with -s read-only for review\n" +
-      "  passes, or set an approval policy that does not block.",
-  },
-  {
-    needle: "approvethiscommand",
-    kind: "permission",
-    hint:
-      "Codex is waiting on per-command approval. Launch with -s read-only for review\n" +
-      "  passes, or set an approval policy that does not block.",
-  },
-  {
-    needle: "signinwithchatgpt",
-    kind: "auth",
-    hint: "Codex is not authenticated. Run: codex --login",
-  },
-];
-
-export interface BlockingPromptDetection {
-  blocked: boolean;
-  kind: BlockingPromptKind | null;
-  hint: string | null;
-}
-
-/**
- * Normalise TUI pane output before matching.
- *
- * `tmux capture-pane` on Codex's box-drawn prompts collapses the spacing, so the
- * literal text arrives as "Doyoutrustthecontentsofthisdirectory?". A spaced regex
- * silently never matches — which is exactly the kind of quietly-dead guard this
- * whole module exists to avoid, so strip everything that is not a letter or digit
- * and match against compact needles.
- */
-function normalisePaneText(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-export function detectBlockingPrompt(paneOutput: string | null | undefined): BlockingPromptDetection {
-  if (!paneOutput) return { blocked: false, kind: null, hint: null };
-
-  const normalised = normalisePaneText(paneOutput);
-  for (const { needle, kind, hint } of BLOCKING_PROMPT_PATTERNS) {
-    if (normalised.includes(needle)) return { blocked: true, kind, hint };
-  }
-
-  return { blocked: false, kind: null, hint: null };
 }
 
 // --------------------------------------------------------------------------
@@ -581,12 +492,13 @@ export function detectBlockingPrompt(paneOutput: string | null | undefined): Blo
 // --------------------------------------------------------------------------
 
 /**
- * Why a run was stopped by a guard.
+ * Why a run was stopped.
  *
- * Declared here rather than in guards.ts because the ledger needs it and guards.ts
- * imports this module — the same reason BlockingPromptKind mirrors state.ts above.
+ * Re-exported from bounds.ts rather than redeclared. It was previously a separate union here,
+ * which is how "blocked" survived in one copy after the transport that could block was gone —
+ * two spellings of one concept drift, and the concept is a ceiling.
  */
-export type BreachReason = "wall_clock" | "stalled" | "blocked";
+export type BreachReason = KillReason;
 
 /**
  * A contract control the caller deliberately switched off.
@@ -640,8 +552,7 @@ export function formatOutcome(ledger: RunLedger): string {
 export function formatLedgerRow(ledger: RunLedger): string {
   const duration = ledger.durationMs === null ? "-" : formatElapsed(ledger.durationMs);
   const spent = ledger.tokensSpent === null ? "-" : ledger.tokensSpent.toLocaleString();
-  const cumulativeInput =
-    ledger.cumulativeInputTokens === null ? "-" : ledger.cumulativeInputTokens.toLocaleString();
+  const cumulativeInput = ledger.cumulativeInputTokens === null ? "-" : ledger.cumulativeInputTokens.toLocaleString();
   const execs = ledger.execCount === null ? "-" : String(ledger.execCount);
 
   return [
@@ -670,6 +581,3 @@ export const LEDGER_HEADER = [
   "BYPASS".padEnd(11),
   "OUTCOME",
 ].join("  ");
-
-/** Default wall-clock bound. The failing run had none, which is why it ran 1h50m. */
-export const DEFAULT_TIMEOUT_MINUTES = config.defaultRunTimeoutMinutes;

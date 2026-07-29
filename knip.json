@@ -1,0 +1,9 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["src/cli.ts", "src/supervisor.ts", "src/notify-hook.ts", "src/**/*.test.ts"],
+  "ignoreBinaries": ["codex", "tmux"],
+  "ignoreDependencies": ["oxlint", "lefthook"],
+  "ignoreExportsUsedInFile": true,
+  "project": ["src/**/*.ts"],
+  "rules": { "duplicates": "off" }
+}

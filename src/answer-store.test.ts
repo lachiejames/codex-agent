@@ -1,8 +1,7 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { config } from "./config.ts";
 import {
   appendAnswer,
   getAnswerPath,
@@ -11,6 +10,7 @@ import {
   readAnswers,
   readLatestAnswer,
 } from "./answer-store.ts";
+import { config } from "./config.ts";
 
 const originalJobsDir = config.jobsDir;
 const originalJobsIndexFile = config.jobsIndexFile;
@@ -32,7 +32,7 @@ describe("appendAnswer", () => {
     // The failure this fixes: the job record keeps 500 characters, so anything longer
     // was only ever recoverable from a live tmux pane.
     const long = "x".repeat(5_000);
-    expect(appendAnswer("job1", { turnId: "t1", timestamp: "2026-07-29T00:00:00.000Z", text: long })).toBe(true);
+    expect(appendAnswer("job1", { text: long, timestamp: "2026-07-29T00:00:00.000Z", turnId: "t1" })).toBe(true);
 
     const latest = readLatestAnswer("job1");
     expect(latest?.text).toHaveLength(5_000);
@@ -40,8 +40,8 @@ describe("appendAnswer", () => {
   });
 
   test("keeps every turn of a conversation, oldest first", () => {
-    appendAnswer("job1", { turnId: "t1", timestamp: "2026-07-29T00:00:00.000Z", text: "first answer" });
-    appendAnswer("job1", { turnId: "t2", timestamp: "2026-07-29T00:05:00.000Z", text: "second answer" });
+    appendAnswer("job1", { text: "first answer", timestamp: "2026-07-29T00:00:00.000Z", turnId: "t1" });
+    appendAnswer("job1", { text: "second answer", timestamp: "2026-07-29T00:05:00.000Z", turnId: "t2" });
 
     const answers = readAnswers("job1");
     expect(answers.map((answer) => answer.text)).toEqual(["first answer", "second answer"]);
@@ -50,14 +50,14 @@ describe("appendAnswer", () => {
 
   test("round-trips a verdict line, which is the last line of a review answer", () => {
     const text = "The retry wrapper double-posts on a 429.\n\nVERDICT: BROKEN";
-    appendAnswer("job1", { turnId: "t1", timestamp: "2026-07-29T00:00:00.000Z", text });
+    appendAnswer("job1", { text, timestamp: "2026-07-29T00:00:00.000Z", turnId: "t1" });
     expect(readLatestAnswer("job1")?.text).toBe(text);
   });
 
   test("does not let answer content forge a turn boundary", () => {
     // An answer quoting the header format must not split into phantom turns.
     const text = "Example of the format:\n=== codex-agent answer | turn fake | now ===\ntail";
-    appendAnswer("job1", { turnId: "t1", timestamp: "2026-07-29T00:00:00.000Z", text });
+    appendAnswer("job1", { text, timestamp: "2026-07-29T00:00:00.000Z", turnId: "t1" });
 
     const answers = readAnswers("job1");
     // The quoted line does split (it is indistinguishable by design), so assert the
@@ -68,12 +68,12 @@ describe("appendAnswer", () => {
   });
 
   test("ignores an empty answer", () => {
-    expect(appendAnswer("job1", { turnId: "t1", timestamp: "2026-07-29T00:00:00.000Z", text: "   " })).toBe(false);
+    expect(appendAnswer("job1", { text: "   ", timestamp: "2026-07-29T00:00:00.000Z", turnId: "t1" })).toBe(false);
     expect(hasStoredAnswer("job1")).toBe(false);
   });
 
   test("survives a header field containing newlines or pipes", () => {
-    appendAnswer("job1", { turnId: "t\n1|x", timestamp: "2026-07-29T00:00:00.000Z", text: "body" });
+    appendAnswer("job1", { text: "body", timestamp: "2026-07-29T00:00:00.000Z", turnId: "t\n1|x" });
     const answers = readAnswers("job1");
     expect(answers).toHaveLength(1);
     expect(answers[0]?.text).toBe("body");
@@ -83,7 +83,7 @@ describe("appendAnswer", () => {
 describe("path safety", () => {
   test("refuses a traversing job id", () => {
     expect(getAnswerPath("../../etc/passwd")).toBeNull();
-    expect(appendAnswer("../../etc/passwd", { turnId: "t", timestamp: "now", text: "x" })).toBe(false);
+    expect(appendAnswer("../../etc/passwd", { text: "x", timestamp: "now", turnId: "t" })).toBe(false);
   });
 
   test("accepts a normal job id", () => {

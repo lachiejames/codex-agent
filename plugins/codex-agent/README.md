@@ -37,9 +37,10 @@ echo 'export PATH="$HOME/dev/personal/codex-agent/bin:$PATH"' >> ~/.zshrc
 codex-agent health
 ```
 
-Requires `tmux`, Bun, the OpenAI Codex CLI, and `codex --login`. Also add a trust entry for each repo you
-run in — Codex matches project trust by **exact path**, so trusting a parent does not cover a new checkout,
-and without it runs block forever on a prompt with zero exec calls:
+Requires Bun, the OpenAI Codex CLI, and `codex --login`. **tmux is not used** — the transport is
+`codex exec --json`, one process per turn. Also add a trust entry for each repo you run in — Codex matches
+project trust by **exact path**, so trusting a parent does not cover a new checkout, and without it a run
+fails in about 4 seconds with `Not inside a trusted directory`:
 
 ```toml
 # ~/.codex/config.toml
@@ -51,22 +52,26 @@ trust_level = "trusted"
 
 ```bash
 # Plan — the prompt is a positional; --map and --wait are bare flags taking no value
-codex-agent start --pass plan "Design the retry strategy" --map --wait
+codex-agent start --pass plan "Design the retry strategy" --timeout 45 --map --wait
 
 # Stress-test the plan before writing any of it — the highest-value phase
-codex-agent start --pass adversarial --allow-unscoped --wait \
+codex-agent start --pass adversarial --allow-unscoped --timeout 20 --wait \
   --property "This plan survives contact with production: <plan>"
 
 # Review: one property per call, diff on stdin, in parallel
 git diff origin/main...HEAD -- src/ > /tmp/review.diff
 for p in "no value is dropped on the error path" "no request escapes authorization"; do
-  codex-agent start --pass review --property "$p" --wait < /tmp/review.diff &
+  codex-agent start --pass review --property "$p" --timeout 10 --wait < /tmp/review.diff &
 done; wait
 
 codex-agent ledger   # any NONE verdict is a failed run, not a pass
 ```
 
-Exit codes: **3** = contract refusal (fix the invocation), **4** = no verdict produced.
+`--timeout <minutes>` is **required** on every launch and has no default: it bounds one turn of thinking,
+and only the caller knows whether this is a 10-minute review or a 45-minute plan. At 85% of it the agent is
+interrupted and asked to conclude with what it has, so a nearly-finished good run is not shot.
+
+Exit codes: **3** = contract refusal (fix the invocation), **4** = the run is not a usable result.
 
 Every pass runs `gpt-5.6-sol` at `xhigh`. Full rationale and the measured evidence behind each rule are in
 the skill and in the repo README.

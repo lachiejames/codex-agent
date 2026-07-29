@@ -6,10 +6,10 @@
 // command, different prompt, no warning. These tests therefore assert on the RESOLVED PATH,
 // not merely on whether something was found, because "found something" was never the bug.
 
+import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, test } from "bun:test";
 import { chooseEntry, findCodebaseMap, loadCodebaseMap } from "./files.ts";
 
 let root: string;
@@ -40,21 +40,23 @@ describe("findCodebaseMap — candidate priority", () => {
   test("prefers docs/CODEBASE_MAP.md", async () => {
     const expected = writeMap("docs/CODEBASE_MAP.md", "# canonical");
     writeMap("CODEBASE_MAP.md", "# root");
-    writeMap("docs/ARCHITECTURE.md", "# fallback");
 
     expect((await findCodebaseMap(root))?.path).toBe(expected);
   });
 
   test("falls back to a root CODEBASE_MAP.md", async () => {
     const expected = writeMap("CODEBASE_MAP.md", "# root");
-    writeMap("docs/ARCHITECTURE.md", "# fallback");
 
     expect((await findCodebaseMap(root))?.path).toBe(expected);
   });
 
-  test("falls back to docs/ARCHITECTURE.md last", async () => {
-    const expected = writeMap("docs/ARCHITECTURE.md", "# fallback");
-    expect((await findCodebaseMap(root))?.path).toBe(expected);
+  // `docs/ARCHITECTURE.md` was an inherited third candidate and is deliberately gone. A repo
+  // with no codebase map but any architecture document would otherwise have that document —
+  // a different artifact, for a different audience — silently injected into a planning prompt.
+  test("does NOT fall back to an architecture document", async () => {
+    writeMap("docs/ARCHITECTURE.md", "# fallback");
+
+    expect(await findCodebaseMap(root)).toBeNull();
   });
 
   test("returns null when nothing matches", async () => {
@@ -71,15 +73,15 @@ describe("findCodebaseMap — candidate priority", () => {
 });
 
 describe("findCodebaseMap — case independence", () => {
-  // The measured defect. Slopweaver has `docs/architecture.md` and none of the three
-  // canonical candidates; on macOS it silently matched the uppercase candidate and injected
-  // ~6KB nobody chose, while reporting a path that did not exist.
+  // The measured defect. A repo carrying a lowercase filename and none of the exact canonical
+  // candidates silently matched the uppercase candidate on macOS's case-insensitive APFS and
+  // injected content nobody chose, while reporting a path that did not exist on disk.
   const lowercaseCases: Array<{ name: string; file: string }> = [
-    { name: "lowercase docs/architecture.md", file: "docs/architecture.md" },
-    { name: "lowercase docs/codebase_map.md", file: "docs/codebase_map.md" },
-    { name: "lowercase root codebase_map.md", file: "codebase_map.md" },
-    { name: "mixed-case docs/Architecture.md", file: "docs/Architecture.md" },
-    { name: "shouty docs/ARCHITECTURE.MD", file: "docs/ARCHITECTURE.MD" },
+    { file: "docs/codebase_map.md", name: "lowercase docs/codebase_map.md" },
+    { file: "codebase_map.md", name: "lowercase root codebase_map.md" },
+    { file: "docs/Codebase_Map.md", name: "mixed-case docs/Codebase_Map.md" },
+    { file: "docs/CODEBASE_MAP.MD", name: "shouty docs/CODEBASE_MAP.MD" },
+    { file: "CODEBASE_map.md", name: "mixed-case root CODEBASE_map.md" },
   ];
 
   for (const testCase of lowercaseCases) {
@@ -99,9 +101,9 @@ describe("findCodebaseMap — case independence", () => {
   // the basename: `Docs/CODEBASE_MAP.md` resolved through the requested `docs` on macOS,
   // reported a fabricated directory casing, and found nothing on Linux.
   const directoryCases: Array<{ name: string; file: string }> = [
-    { name: "Docs/CODEBASE_MAP.md", file: "Docs/CODEBASE_MAP.md" },
-    { name: "DOCS/architecture.md", file: "DOCS/architecture.md" },
-    { name: "Doc-less root codebase_map.md", file: "codebase_map.md" },
+    { file: "Docs/CODEBASE_MAP.md", name: "Docs/CODEBASE_MAP.md" },
+    { file: "DOCS/codebase_map.md", name: "DOCS/codebase_map.md" },
+    { file: "codebase_map.md", name: "Doc-less root codebase_map.md" },
   ];
 
   for (const testCase of directoryCases) {
@@ -122,7 +124,7 @@ describe("findCodebaseMap — case independence", () => {
 
   test("a directory named like a map is not a map", async () => {
     mkdirSync(join(root, "docs", "CODEBASE_MAP.md"), { recursive: true });
-    const expected = writeMap("docs/architecture.md", "# real map");
+    const expected = writeMap("CODEBASE_MAP.md", "# real map");
 
     expect((await findCodebaseMap(root))?.path).toBe(expected);
   });
@@ -136,9 +138,9 @@ describe("INVARIANT: the reported path is the one the filesystem reports", () =>
   const layouts = [
     "docs/CODEBASE_MAP.md",
     "CODEBASE_MAP.md",
-    "docs/architecture.md",
+    "docs/codebase_map.md",
     "Docs/CODEBASE_MAP.md",
-    "DOCS/Architecture.MD",
+    "DOCS/Codebase_Map.MD",
   ];
 
   for (const layout of layouts) {
@@ -189,7 +191,7 @@ describe("chooseEntry", () => {
       chooseEntry({
         entries: ["architecture.md", "ARCHITECTURE.md", "Architecture.md"],
         wantedName: "ARCHITECTURE.md",
-      })
+      }),
     ).toEqual({ chosen: "ARCHITECTURE.md", others: ["Architecture.md", "architecture.md"] });
   });
 
@@ -200,7 +202,7 @@ describe("chooseEntry", () => {
       chooseEntry({
         entries: ["architecture.md", "Architecture.md"],
         wantedName: "ARCHITECTURE.md",
-      })
+      }),
     ).toEqual({ chosen: "Architecture.md", others: ["architecture.md"] });
   });
 
@@ -218,14 +220,12 @@ describe("chooseEntry", () => {
 
   test("ignores entries that merely contain the wanted name", () => {
     expect(
-      chooseEntry({ entries: ["CODEBASE_MAP.md.bak", "old-CODEBASE_MAP.md"], wantedName: "CODEBASE_MAP.md" })
+      chooseEntry({ entries: ["CODEBASE_MAP.md.bak", "old-CODEBASE_MAP.md"], wantedName: "CODEBASE_MAP.md" }),
     ).toBeNull();
   });
 
   test("reports no ambiguity for a single match", () => {
-    expect(
-      chooseEntry({ entries: ["docs", "CODEBASE_MAP.md"], wantedName: "CODEBASE_MAP.md" })?.others
-    ).toEqual([]);
+    expect(chooseEntry({ entries: ["docs", "CODEBASE_MAP.md"], wantedName: "CODEBASE_MAP.md" })?.others).toEqual([]);
   });
 });
 

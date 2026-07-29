@@ -99,7 +99,7 @@ export function readAnswers(jobId: string): StoredAnswer[] {
     if (match) {
       if (current) answers.push({ ...current, text: current.text.trim() });
       // Both capture groups are mandatory in the pattern, so a match always fills them.
-      current = { turnId: match[1] ?? "", timestamp: match[2] ?? "", text: "" };
+      current = { text: "", timestamp: match[2] ?? "", turnId: match[1] ?? "" };
       continue;
     }
     if (current) current.text += `${line}\n`;
