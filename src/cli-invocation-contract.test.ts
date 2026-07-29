@@ -313,13 +313,40 @@ describe("prompt shaping and profile resolution", () => {
     }
   });
 
-  test("an explicit -r still overrides, so the escape hatch remains", () => {
+  // The escape hatch is GONE, and its absence is the assertion. `-r low` was the one
+  // documented way to violate docs/SPEC.md behaviour 2.
+  test("-r is rejected outright, not silently ignored", () => {
     const result = runCli(
       ["start", "--pass", "review", "--property", "x holds", "-r", "low", "--timeout", "10", "--dry-run"],
       SAMPLE_DIFF,
     );
 
-    expect(result.stdout).toContain("Reasoning: low");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("-r was removed");
+    expect(result.stderr).toContain("pinned to xhigh");
+  });
+
+  // Why rejection matters rather than ignoring: the parser used to fall through on unknown
+  // flags, so `-r low` would have dropped `-r` and appended "low" to the PROMPT as a
+  // positional — silently changing the question being asked.
+  test("a retired flag's value never leaks into the prompt", () => {
+    const result = runCli(
+      ["start", "--pass", "review", "--property", "x holds", "-m", "gpt-4", "--timeout", "10", "--dry-run"],
+      SAMPLE_DIFF,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).not.toContain("gpt-4");
+  });
+
+  test("an unknown flag is an error", () => {
+    const result = runCli(
+      ["start", "--pass", "review", "--property", "x holds", "--timeout", "10", "--nonsense", "--dry-run"],
+      SAMPLE_DIFF,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Unknown option: --nonsense");
   });
 
   test("--word-cap 0 removes the answer cap", () => {

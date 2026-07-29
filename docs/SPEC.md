@@ -39,6 +39,12 @@ other pass.
 **Bound the question, not the thinking.** If a design points at lowering effort, the design
 is wrong.
 
+This is enforced structurally rather than remembered. There is **no `-m` and no `-r` flag**, and
+no per-profile effort field — both existed, both were deleted, and both are now rejected with an
+explanation rather than silently ignored. `src/config.ts` holds the two values and is the single
+place to change on a Codex upgrade. A rule the tool still offers you a way to break is a
+convention, not a rule.
+
 ### 3. The invocation contract holds.
 
 Derived from a measured 1h50m / 115-exec / no-verdict failure on 2026-07-26. See the header

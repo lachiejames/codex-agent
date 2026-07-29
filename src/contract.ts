@@ -21,20 +21,20 @@
 // for. The fix is to bound the *question*, not the thinking.
 
 import type { KillReason } from "./bounds.ts";
-import type { ReasoningEffort, SandboxMode } from "./config.ts";
+import type { SandboxMode } from "./config.ts";
 
 // --------------------------------------------------------------------------
 // Pass kinds — effort tiering per pass, not one global dial
 // --------------------------------------------------------------------------
 
-// Verification is N independent investigations with no natural stopping point;
-// planning converges on a single artifact. They need different bounds, so the tier
-// is chosen per pass rather than by turning one global effort dial up or down.
+// Verification is N independent investigations with no natural stopping point; planning
+// converges on a single artifact. They differ in scope rules, breadth limits and word caps —
+// but NOT in effort. Every profile carried `reasoning: "xhigh"`, four identical values, so the
+// field was variation that never varied. Effort is pinned once in config.ts.
 export type PassKind = "plan" | "review" | "mechanical" | "adversarial";
 
 export interface PassProfile {
   kind: PassKind;
-  reasoning: ReasoningEffort;
   /**
    * Sandbox for this pass. Every pass here is read-only: Codex is the brain, Claude is
    * the body. Planning and reviewing are both pure reads, so no profile grants write.
@@ -57,7 +57,6 @@ export const PASS_PROFILES: Record<PassKind, PassProfile> = {
     description: "Try hard to break one falsifiable claim about a supplied diff.",
     kind: "adversarial",
     maxChecks: 1,
-    reasoning: "xhigh",
     requiresScope: true,
     requiresVerdict: true,
     sandbox: "read-only",
@@ -72,7 +71,6 @@ export const PASS_PROFILES: Record<PassKind, PassProfile> = {
     description: "Mechanical house-rule/pattern checks against a supplied diff.",
     kind: "mechanical",
     maxChecks: 10,
-    reasoning: "xhigh",
     requiresScope: true,
     requiresVerdict: true,
     sandbox: "read-only",
@@ -84,7 +82,6 @@ export const PASS_PROFILES: Record<PassKind, PassProfile> = {
     description: "Design/plan a single artifact. Broad by nature; converges on one output.",
     kind: "plan",
     maxChecks: Number.POSITIVE_INFINITY,
-    reasoning: "xhigh",
     requiresScope: false,
     requiresVerdict: false,
     sandbox: "read-only",
@@ -95,7 +92,6 @@ export const PASS_PROFILES: Record<PassKind, PassProfile> = {
     description: "Attack a specific property of a supplied diff. Must reach CLEAN or BROKEN.",
     kind: "review",
     maxChecks: 3,
-    reasoning: "xhigh",
     requiresScope: true,
     requiresVerdict: true,
     sandbox: "read-only",

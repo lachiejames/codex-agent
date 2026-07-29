@@ -203,21 +203,20 @@ used to fall through and be launched as a prompt, so `codex-agent repot abc123` 
 usable result. `tail` is the raw event stream — for watching a run or diagnosing Codex, never for
 retrieving an answer.
 
-| Flag                | Values                                         | Notes                                                                                               |
-| ------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `--timeout`         | minutes                                        | **Required, no default.** Bounds one turn of thinking; omitting it is exit 3                        |
-| `--pass`            | plan, review, mechanical, adversarial          | Sets effort, sandbox, word cap, check limit                                                         |
-| `--property`        | string                                         | The single falsifiable claim to attack                                                              |
-| `--allow-unscoped`  | flag                                           | No stdin, by exception: needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
-| `--max-checks`      | n                                              | Override the enumerated-check limit                                                                 |
-| `--word-cap`        | n                                              | Override the answer cap (0 disables)                                                                |
-| `--no-contract`     | flag                                           | Disable enforcement; recorded as a bypass                                                           |
-| `-s`, `--sandbox`   | read-only, workspace-write, danger-full-access | Default `read-only`                                                                                 |
-| `-r`, `--reasoning` | low, medium, high, xhigh                       | Overrides the profile                                                                               |
-| `-d`, `--dir`       | path                                           | Working directory (default: cwd)                                                                    |
-| `--map`             | flag (takes no value)                          | Include the codebase map; prints the resolved path                                                  |
-| `-w`, `--wait`      | flag                                           | Return once the turn concludes, printing a cost line. The bound applies either way                  |
-| `--dry-run`         | flag                                           | Show the shaped prompt and the decision without executing                                           |
+| Flag               | Values                                         | Notes                                                                                               |
+| ------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `--timeout`        | minutes                                        | **Required, no default.** Bounds one turn of thinking; omitting it is exit 3                        |
+| `--pass`           | plan, review, mechanical, adversarial          | Sets effort, sandbox, word cap, check limit                                                         |
+| `--property`       | string                                         | The single falsifiable claim to attack                                                              |
+| `--allow-unscoped` | flag                                           | No stdin, by exception: needs explicit `--pass` + inline subject (≥200 chars); recorded as a bypass |
+| `--max-checks`     | n                                              | Override the enumerated-check limit                                                                 |
+| `--word-cap`       | n                                              | Override the answer cap (0 disables)                                                                |
+| `--no-contract`    | flag                                           | Disable enforcement; recorded as a bypass                                                           |
+| `-s`, `--sandbox`  | read-only, workspace-write, danger-full-access | Default `read-only`                                                                                 |
+| `-d`, `--dir`      | path                                           | Working directory (default: cwd)                                                                    |
+| `--map`            | flag (takes no value)                          | Include the codebase map; prints the resolved path                                                  |
+| `-w`, `--wait`     | flag                                           | Return once the turn concludes, printing a cost line. The bound applies either way                  |
+| `--dry-run`        | flag                                           | Show the shaped prompt and the decision without executing                                           |
 
 There is no `-f`/`--file` flag — it was removed upstream. **stdin is the scope channel.**
 
