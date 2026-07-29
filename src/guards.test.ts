@@ -4,6 +4,7 @@ import {
   advanceProgress,
   evaluateGuards,
   stalledForMs,
+  type GuardAction,
   type GuardInput,
   type ProgressState,
 } from "./guards.ts";
@@ -33,7 +34,12 @@ function running(overrides: Partial<GuardInput> = {}): GuardInput {
 describe("evaluateGuards — wall clock", () => {
   // The bound is inclusive. Asserted at the exact millisecond because an off-by-one here
   // is the difference between a bound that fires and one that never does.
-  const cases: Array<{ name: string; elapsedMs: number; timeoutMinutes: number | null; action: string }> = [
+  const cases: Array<{
+    name: string;
+    elapsedMs: number;
+    timeoutMinutes: number | null;
+    action: GuardAction;
+  }> = [
     { name: "one ms under the bound continues", elapsedMs: 45 * MINUTE - 1, timeoutMinutes: 45, action: "continue" },
     { name: "exactly at the bound kills", elapsedMs: 45 * MINUTE, timeoutMinutes: 45, action: "kill" },
     { name: "past the bound kills", elapsedMs: 46 * MINUTE, timeoutMinutes: 45, action: "kill" },
@@ -325,9 +331,9 @@ describe("advanceProgress", () => {
   });
 
   const growthCases: Array<{ name: string; logBytes: number; tokensSpent: number | null; turnsCompleted: number }> = [
-    { name: "log growth is progress", logBytes: 501, logMtimeMs: 0, logIdentity: "1:1", tokensSpent: 100, turnsCompleted: 0 },
-    { name: "token growth is progress", logBytes: 500, logMtimeMs: 0, logIdentity: "1:1", tokensSpent: 101, turnsCompleted: 0 },
-    { name: "a completed turn is progress", logBytes: 500, logMtimeMs: 0, logIdentity: "1:1", tokensSpent: 100, turnsCompleted: 1 },
+    { name: "log growth is progress", logBytes: 501, tokensSpent: 100, turnsCompleted: 0 },
+    { name: "token growth is progress", logBytes: 500, tokensSpent: 101, turnsCompleted: 0 },
+    { name: "a completed turn is progress", logBytes: 500, tokensSpent: 100, turnsCompleted: 1 },
   ];
 
   for (const testCase of growthCases) {

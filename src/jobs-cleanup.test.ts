@@ -19,7 +19,6 @@ function setTempJobsDir(): string {
 
 function jobFixture(overrides: Partial<Job> & Pick<Job, "id">): Job {
   return {
-    id: overrides.id,
     status: "completed",
     prompt: "Test prompt",
     model: "gpt-5.5",
@@ -65,7 +64,7 @@ describe("job cleanup", () => {
 
     const archives = trashDirs();
     expect(archives).toHaveLength(1);
-    const archiveDir = join(config.jobsDir, ".trash", archives[0]);
+    const archiveDir = join(config.jobsDir, ".trash", archives[0] ?? "");
     for (const ext of [".json", ".prompt", ".log", ".turn-complete"]) {
       expect(existsSync(join(archiveDir, `deadbeef${ext}`))).toBe(true);
     }
@@ -96,6 +95,6 @@ describe("job cleanup", () => {
 
     const archives = trashDirs();
     expect(archives).toHaveLength(1);
-    expect(existsSync(join(config.jobsDir, ".trash", archives[0], "old-job.json"))).toBe(true);
+    expect(existsSync(join(config.jobsDir, ".trash", archives[0] ?? "", "old-job.json"))).toBe(true);
   });
 });

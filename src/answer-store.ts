@@ -98,7 +98,8 @@ export function readAnswers(jobId: string): StoredAnswer[] {
     const match = ANSWER_HEADER_PATTERN.exec(line);
     if (match) {
       if (current) answers.push({ ...current, text: current.text.trim() });
-      current = { turnId: match[1], timestamp: match[2], text: "" };
+      // Both capture groups are mandatory in the pattern, so a match always fills them.
+      current = { turnId: match[1] ?? "", timestamp: match[2] ?? "", text: "" };
       continue;
     }
     if (current) current.text += `${line}\n`;
@@ -111,7 +112,7 @@ export function readAnswers(jobId: string): StoredAnswer[] {
 /** The most recent persisted answer — the one a verdict would be in. */
 export function readLatestAnswer(jobId: string): StoredAnswer | null {
   const answers = readAnswers(jobId);
-  return answers.length > 0 ? answers[answers.length - 1] : null;
+  return answers.at(-1) ?? null;
 }
 
 export function hasStoredAnswer(jobId: string): boolean {

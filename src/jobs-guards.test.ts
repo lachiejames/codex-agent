@@ -43,7 +43,6 @@ function agoIso(msAgo: number): string {
 
 function runningJob(overrides: Partial<Job> & Pick<Job, "id">): Job {
   const job: Job = {
-    id: overrides.id,
     status: "running",
     prompt: "Design the retry strategy",
     model: "gpt-5.6-sol",
@@ -106,7 +105,8 @@ describe("enforceRunGuards — wall clock on the background path", () => {
     expect(job?.completedAt).toBe("2026-07-29T12:00:00.000Z");
     expect(job?.timedOut).toBe(true);
     // The error a caller sees must be the breach explanation, not a generic failure.
-    expect(job?.error).toBe(job?.breachMessage);
+    expect(job?.error).toContain("wall-clock bound of 45m");
+    expect(job?.error).toBe(job?.breachMessage ?? undefined);
   });
 
   test("ignores a job that is not running", () => {

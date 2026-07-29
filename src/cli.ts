@@ -3,7 +3,7 @@
 // Codex Agent CLI - Delegate tasks to GPT Codex agents with tmux integration
 // Designed for Claude Code orchestration with bidirectional communication
 
-import { config, ReasoningEffort, SandboxMode } from "./config.ts";
+import { config, type ReasoningEffort, type SandboxMode } from "./config.ts";
 import {
   startJob,
   loadJob,
@@ -42,7 +42,6 @@ import {
   evaluateHeartbeat,
   formatElapsed,
   formatLedgerRow,
-  formatOutcome,
   formatViolations,
   isPassKind,
   resolvePassKind,
@@ -232,6 +231,7 @@ function parseArgs(args: string[]): {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg === undefined) continue;
 
     if (arg === "-h" || arg === "--help") {
       console.log(HELP);
@@ -247,7 +247,7 @@ function parseArgs(args: string[]): {
         process.exit(1);
       }
     } else if (arg === "-m" || arg === "--model") {
-      options.model = args[++i];
+      options.model = args[++i] ?? config.model;
     } else if (arg === "-s" || arg === "--sandbox") {
       const mode = args[++i] as SandboxMode;
       if (config.sandboxModes.includes(mode)) {
@@ -264,7 +264,7 @@ function parseArgs(args: string[]): {
       options.notifyOnComplete = args[++i] ?? null;
       options.waitForCompletion = true;
     } else if (arg === "-d" || arg === "--dir") {
-      options.dir = args[++i];
+      options.dir = args[++i] ?? process.cwd();
     } else if (arg === "--parent-session") {
       options.parentSessionId = args[++i] ?? null;
     } else if (arg === "--map") {
@@ -824,7 +824,9 @@ function markSignalTurnComplete(job: Job, signalMessage: string | null, timestam
     job.turnsCompleted = (job.turnsCompleted ?? job.turnCount ?? 0) + 1;
   }
   job.lastTurnCompletedAt = timestamp;
-  job.lastAgentMessage = signalMessage;
+  // `Job.lastAgentMessage` is `string | undefined`; a null here used to be written straight
+  // into the job JSON as an explicit null, which is a third state nothing else expects.
+  job.lastAgentMessage = signalMessage ?? undefined;
   job.turnState = "idle";
   saveJob(job);
   return loadJob(job.id) ?? job;
@@ -949,12 +951,14 @@ async function launchJob(taskPrompt: string, options: Options): Promise<void> {
     model: options.model,
     reasoningEffort: launch.reasoning,
     sandbox: launch.sandbox,
-    parentSessionId: options.parentSessionId ?? undefined,
     cwd: options.dir,
     passKind: launch.passKind,
     scoped: launch.scoped,
     timeoutMinutes: launch.timeoutMinutes,
     bypass: launch.bypass,
+    // Set only when a parent session was named: with `exactOptionalPropertyTypes` an
+    // explicitly-undefined field is not the same type as an absent one.
+    ...(options.parentSessionId !== null ? { parentSessionId: options.parentSessionId } : {}),
   });
 
   console.log(`Job started: ${job.id}`);
@@ -1075,20 +1079,21 @@ async function main() {
       }
 
       case "status": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        const job = refreshJobStatus(positional[0]);
+        const job = refreshJobStatus(jobId);
         if (!job) {
-          console.error(`Job ${positional[0]} not found`);
+          console.error(`Job ${jobId} not found`);
           process.exit(1);
         }
 
-        const statusPayload = getStatusJson(positional[0]);
+        const statusPayload = getStatusJson(jobId);
         if (!statusPayload) {
-          console.error(`Job ${positional[0]} not found`);
+          console.error(`Job ${jobId} not found`);
           process.exit(1);
         }
         if (options.json) {
@@ -1104,22 +1109,23 @@ async function main() {
       }
 
       case "await-turn": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        await awaitTurn(positional[0], options.json);
+        await awaitTurn(jobId, options.json);
         break;
       }
 
       case "send": {
-        if (positional.length < 2) {
+        const jobId = positional[0];
+        if (positional.length < 2 || jobId === undefined) {
           console.error("Error: Usage: codex-agent send <jobId> \"message\"");
           process.exit(1);
         }
 
-        const jobId = positional[0];
         const message = positional.slice(1).join(" ");
 
         if (sendToJob(jobId, message)) {
@@ -1133,13 +1139,14 @@ async function main() {
       }
 
       case "capture": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
         const lines = positional[1] ? parseInt(positional[1], 10) : 50;
-        let output = getJobOutput(positional[0], lines);
+        let output = getJobOutput(jobId, lines);
 
         if (output) {
           if (options.stripAnsi) {
@@ -1147,21 +1154,22 @@ async function main() {
           }
           console.log(output);
         } else {
-          console.error(`Could not capture output for job ${positional[0]}`);
+          console.error(`Could not capture output for job ${jobId}`);
           process.exit(1);
         }
         break;
       }
 
       case "report": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        const report = buildRunReport(positional[0]);
+        const report = buildRunReport(jobId);
         if (!report) {
-          console.error(`Job ${positional[0]} not found`);
+          console.error(`Job ${jobId} not found`);
           process.exit(1);
         }
 
@@ -1188,20 +1196,21 @@ async function main() {
       }
 
       case "output": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        let output = getJobFullOutput(positional[0]);
+        let output = getJobFullOutput(jobId);
         if (output) {
           // The complaint this answers: a caller ran `output --clean`, got raw TUI
           // scrollback, and had to go hunting for the verdict in the job summary. The
           // transcript is still available here, but say where the answer actually is.
-          if (hasStoredAnswer(positional[0])) {
+          if (hasStoredAnswer(jobId)) {
             console.error(
               `note: this is the raw session transcript. For the agent's answer, the ledger and ` +
-                `why the run was judged as it was, use: codex-agent report ${positional[0]}`
+                `why the run was judged as it was, use: codex-agent report ${jobId}`
             );
           }
           if (options.stripAnsi) {
@@ -1209,37 +1218,39 @@ async function main() {
           }
           console.log(output);
         } else {
-          console.error(`Could not get output for job ${positional[0]}`);
+          console.error(`Could not get output for job ${jobId}`);
           process.exit(1);
         }
         break;
       }
 
       case "attach": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        const attachCmd = getAttachCommand(positional[0]);
+        const attachCmd = getAttachCommand(jobId);
         if (attachCmd) {
           console.log(attachCmd);
         } else {
-          console.error(`Job ${positional[0]} not found or no tmux session`);
+          console.error(`Job ${jobId} not found or no tmux session`);
           process.exit(1);
         }
         break;
       }
 
       case "watch": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        const job = loadJob(positional[0]);
+        const job = loadJob(jobId);
         if (!job || !job.tmuxSession) {
-          console.error(`Job ${positional[0]} not found or no tmux session`);
+          console.error(`Job ${jobId} not found or no tmux session`);
           process.exit(1);
         }
 
@@ -1250,7 +1261,7 @@ async function main() {
         // Simple polling-based watch
         let lastOutput = "";
         const pollInterval = setInterval(() => {
-          const output = getJobOutput(positional[0], 100);
+          const output = getJobOutput(jobId, 100);
           if (output && output !== lastOutput) {
             // Print only new content
             if (lastOutput) {
@@ -1265,7 +1276,7 @@ async function main() {
           }
 
           // Check if job is still running
-          const refreshed = refreshJobStatus(positional[0]);
+          const refreshed = refreshJobStatus(jobId);
           if (refreshed && refreshed.status !== "running") {
             console.error(`\nJob ${refreshed.status}`);
             clearInterval(pollInterval);
@@ -1332,15 +1343,16 @@ async function main() {
       }
 
       case "kill": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        if (killJob(positional[0])) {
-          console.log(`Killed job: ${positional[0]}`);
+        if (killJob(jobId)) {
+          console.log(`Killed job: ${jobId}`);
         } else {
-          console.error(`Could not kill job: ${positional[0]}`);
+          console.error(`Could not kill job: ${jobId}`);
           process.exit(1);
         }
         break;
@@ -1407,15 +1419,16 @@ async function main() {
       }
 
       case "delete": {
-        if (positional.length === 0) {
+        const jobId = positional[0];
+        if (jobId === undefined) {
           console.error("Error: No job ID provided");
           process.exit(1);
         }
 
-        if (deleteJob(positional[0])) {
-          console.log(`Deleted job: ${positional[0]}`);
+        if (deleteJob(jobId)) {
+          console.log(`Deleted job: ${jobId}`);
         } else {
-          console.error(`Could not delete job: ${positional[0]}`);
+          console.error(`Could not delete job: ${jobId}`);
           process.exit(1);
         }
         break;

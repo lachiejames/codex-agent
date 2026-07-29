@@ -103,7 +103,7 @@ describe("locating the session file for a job", () => {
   // every session-derived metric silently reads as unavailable. These cover the
   // fallback, including the concurrency collision that this contract's own adversarial
   // pass found in the first version of it.
-  const originalCodexHome = process.env.CODEX_HOME;
+  const originalCodexHome = process.env["CODEX_HOME"];
   let codexHome: string;
   let sessionsDir: string;
 
@@ -111,12 +111,12 @@ describe("locating the session file for a job", () => {
     codexHome = mkdtempSync(join(tmpdir(), "codex-agent-home-"));
     sessionsDir = join(codexHome, "sessions", "2026", "07", "27");
     mkdirSync(sessionsDir, { recursive: true });
-    process.env.CODEX_HOME = codexHome;
+    process.env["CODEX_HOME"] = codexHome;
   });
 
   afterEach(() => {
-    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalCodexHome === undefined) delete process.env["CODEX_HOME"];
+    else process.env["CODEX_HOME"] = originalCodexHome;
   });
 
   /** Local time, matching how Codex names rollout files. */

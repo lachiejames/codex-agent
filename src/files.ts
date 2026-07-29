@@ -86,9 +86,10 @@ export function chooseEntry({
   const wantedLower = wantedName.toLowerCase();
   const matches = entries.filter((entry) => entry.toLowerCase() === wantedLower).sort();
 
-  if (matches.length === 0) return null;
+  const [firstMatch] = matches;
+  if (firstMatch === undefined) return null;
 
-  const chosen = matches.find((entry) => entry === wantedName) ?? matches[0];
+  const chosen = matches.find((entry) => entry === wantedName) ?? firstMatch;
   return { chosen, others: matches.filter((entry) => entry !== chosen) };
 }
 
@@ -143,9 +144,9 @@ function resolveCandidate(
   let current = resolve(cwd);
   const ambiguousWith: string[] = [];
 
-  for (let index = 0; index < segments.length; index += 1) {
+  for (const [index, segment] of segments.entries()) {
     const isFinalSegment = index === segments.length - 1;
-    const match = resolveSegment(current, segments[index], !isFinalSegment);
+    const match = resolveSegment(current, segment, !isFinalSegment);
     if (!match) return null;
 
     ambiguousWith.push(...match.others.map((other) => join(current, other)));

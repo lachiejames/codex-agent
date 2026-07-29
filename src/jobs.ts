@@ -11,7 +11,7 @@ import {
   rmSync,
 } from "fs";
 import { join, resolve, sep } from "path";
-import { config, ReasoningEffort, SandboxMode } from "./config.ts";
+import { config, type ReasoningEffort, type SandboxMode } from "./config.ts";
 import { randomBytes } from "crypto";
 import {
   extractSessionId,
@@ -82,7 +82,12 @@ export interface Job {
   turnsCompleted?: number;
   turnCount?: number;
   lastTurnCompletedAt?: string;
-  lastAgentMessage?: string;
+  /**
+   * Explicitly `| undefined`: a turn that completes with no message clears this field by
+   * assigning undefined, which is how "no message" is expressed here — null was tried and
+   * is a third state nothing else expects. Persisted JSON is identical either way.
+   */
+  lastAgentMessage?: string | undefined;
   turnState?: LegacyTurnState;
   blockerKind?: BlockerKind | null;
   promptEstimatedTokens?: number;
@@ -94,8 +99,15 @@ export interface Job {
   passKind?: PassKind | null;
   /** Whether scope (a diff) was supplied on stdin. */
   scoped?: boolean;
-  /** Wall-clock bound in minutes. Every run has one; the failing run had none. */
-  timeoutMinutes?: number;
+  /**
+   * Wall-clock bound in minutes. Every run has one; the failing run had none.
+   *
+   * Explicitly `| undefined` rather than merely optional: callers build a job by
+   * overriding a template that already carries a bound, and "unbounded" has to be
+   * expressible as `timeoutMinutes: undefined` in that override. The two forms are
+   * indistinguishable once persisted — JSON.stringify drops an undefined value.
+   */
+  timeoutMinutes?: number | undefined;
   /** Set when the wall-clock bound was hit and the job was stopped. */
   timedOut?: boolean;
   /** Parsed VERDICT: line, or null when the run never concluded. */
@@ -889,7 +901,9 @@ function resolveVerdictCheaply(job: Job): string | null {
   // breach. A later turn does not retract an earlier verdict.
   const answers = readAnswers(job.id);
   for (let index = answers.length - 1; index >= 0; index -= 1) {
-    const verdict = extractVerdict(answers[index].text);
+    const answer = answers[index];
+    if (!answer) continue;
+    const verdict = extractVerdict(answer.text);
     if (verdict) return verdict;
   }
 
@@ -1070,16 +1084,24 @@ export function startJob(options: StartJobOptions): Job {
     model: options.model || config.model,
     reasoningEffort: options.reasoningEffort || config.defaultReasoningEffort,
     sandbox: options.sandbox || config.defaultSandbox,
-    parentSessionId: options.parentSessionId,
     cwd,
     createdAt: new Date().toISOString(),
-    promptEstimatedTokens: options.promptContext?.estimatedTokens,
-    promptBytes: options.promptContext?.bytes,
-    promptContext: options.promptContext,
     passKind: options.passKind ?? null,
     scoped: options.scoped ?? false,
     timeoutMinutes: options.timeoutMinutes,
     bypass: options.bypass ?? null,
+    // Attached only when supplied, so an unsupplied option stays absent from the record
+    // rather than becoming a present-but-undefined key. Same persisted JSON either way.
+    ...(options.parentSessionId !== undefined
+      ? { parentSessionId: options.parentSessionId }
+      : {}),
+    ...(options.promptContext !== undefined
+      ? {
+          promptEstimatedTokens: options.promptContext.estimatedTokens,
+          promptBytes: options.promptContext.bytes,
+          promptContext: options.promptContext,
+        }
+      : {}),
   };
 
   // Record the session name BEFORE creating it so orphan cleanup
@@ -1157,7 +1179,7 @@ export function getJobOutput(jobId: string, lines?: number): string | null {
 
   // First try tmux capture if session exists
   if (job.tmuxSession && sessionExists(job.tmuxSession)) {
-    const output = capturePane(job.tmuxSession, { lines });
+    const output = capturePane(job.tmuxSession, lines === undefined ? {} : { lines });
     if (output) return output;
   }
 

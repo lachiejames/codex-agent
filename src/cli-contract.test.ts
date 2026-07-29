@@ -32,7 +32,6 @@ const SECOND = 1000;
 
 function writeJob(home: string, overrides: Partial<Job> & Pick<Job, "id">): void {
   const job: Job = {
-    id: overrides.id,
     status: "running",
     prompt: "Test prompt",
     model: "gpt-5.5",

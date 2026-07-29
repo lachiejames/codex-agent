@@ -118,15 +118,14 @@ function isTerminalProcessState(processState: ProcessState): boolean {
   );
 }
 
+/** A counter that is absent, non-finite or negative reads as zero. */
+function toPositiveInt(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
+
 function normalizeTurnsCompleted(job: JobStateInput): number {
-  const turnsCompleted =
-    Number.isFinite(job.turnsCompleted) && job.turnsCompleted > 0
-      ? Math.floor(job.turnsCompleted)
-      : 0;
-  const turnCount =
-    Number.isFinite(job.turnCount) && job.turnCount > 0 ? Math.floor(job.turnCount) : 0;
-  const value = Math.max(turnsCompleted, turnCount);
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  return Math.max(toPositiveInt(job.turnsCompleted), toPositiveInt(job.turnCount));
 }
 
 export function normalizeJobProcessState(job: JobStateInput): ProcessState {
@@ -143,9 +142,18 @@ export function normalizeJobProcessState(job: JobStateInput): ProcessState {
   return "created";
 }
 
+/**
+ * Normalise a job's lifecycle fields.
+ *
+ * The return type must OMIT the input's own lifecycle fields before intersecting. The
+ * previous signature was `T & NormalizedJobLifecycle`, which claimed the result still
+ * carried the caller's `turnState` — so normalising `{turnState: "working"}` to `"idle"`
+ * produced a value the compiler believed was still `"working"`. Every downstream narrowing
+ * on this function's output was reasoning from the input.
+ */
 export function normalizeJobLifecycle<T extends JobStateInput>(
   job: T
-): T & NormalizedJobLifecycle {
+): Omit<T, keyof NormalizedJobLifecycle> & NormalizedJobLifecycle {
   const processState = normalizeJobProcessState(job);
   const turnsCompleted = normalizeTurnsCompleted(job);
   const hasContextLimit =
