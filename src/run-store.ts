@@ -1,13 +1,14 @@
 // The run record, and where its artifacts live.
 //
-// A RUN is a Codex thread plus everything observed about it. It is deliberately a different
-// record from the old `Job` in jobs.ts: under the tmux transport a job was one long-lived
-// interactive session, whereas a run is a thread driven by N successive `codex exec`
-// processes. Modelling the second as the first is what made the wall-clock bound start
-// measuring conversation lifetime instead of thinking time.
+// A RUN is a Codex thread plus everything observed about it. It replaced an earlier `Job`
+// record: under the retired tmux transport a job was one long-lived interactive session,
+// whereas a run is a thread driven by N successive `codex exec` processes. Modelling the
+// second as the first is what made the wall-clock bound start measuring conversation
+// lifetime instead of thinking time.
 //
-// Kept in a separate file with a separate extension (`.run.json`) so the old transport keeps
-// working untouched while this one is proven. See docs/SPEC.md.
+// The `.run.json` extension dates from the migration, when both records had to coexist while
+// this one was proven. The tmux transport is gone; the extension is kept because existing
+// run artifacts on disk are named with it. See docs/SPEC.md.
 
 import {
   existsSync,

@@ -1,16 +1,16 @@
 // Durable answers.
 //
-// A verdict that exists only in a live tmux session is not a verdict. Two separate
-// failures on 2026-07-28 said so: one chat lost a whole planning pass ("tmux server
-// died, both sessions are gone, so P2's full prose is unrecoverable"), and another
-// reached for `output --clean` and got 53KB of Codex TUI box-drawing scrollback starting
-// with the splash screen — while the answer it wanted was sitting in the job JSON,
-// truncated to 500 characters by `updateJobTurn`.
+// A verdict that exists only in a live process is not a verdict. Two separate failures on
+// 2026-07-28 said so, both under the retired tmux transport: one chat lost a whole planning
+// pass when the tmux server died and took both sessions with it, and another went looking for
+// the answer in terminal scrollback and got 53KB of Codex TUI box-drawing starting at the
+// splash screen — while the answer it wanted sat in the run record, truncated to 500
+// characters.
 //
-// Both are the same defect: the answer was never persisted as an answer. The 500-char
-// preview stays where it is, because status listings need something short — but the full
-// text is now written to `<jobId>.answer.md` the moment the turn-complete hook fires, and
-// `codex-agent report` reads that file rather than scraping a terminal.
+// Both are the same defect: the answer was never persisted as an answer. The 500-character
+// preview stays where it is, because status listings need something short — but the full text
+// is written to `<runId>.answer.md` when the supervisor concludes a turn, and
+// `codex-agent report` reads that file. Nothing parses it back out of the event stream.
 
 import { appendFileSync, readFileSync } from "fs";
 import { resolve, sep } from "path";

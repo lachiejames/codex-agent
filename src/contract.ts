@@ -65,8 +65,9 @@ export const PASS_PROFILES: Record<PassKind, PassProfile> = {
   // Was "medium" on the theory that pattern-matching does not need xhigh. Raised to
   // xhigh because this tool is used for thinking, not for cheap bulk work, and a pass
   // that silently downgrades the model's reasoning is a footgun: you would ask for a
-  // check and quietly get a worse thinker than every other pass. If cost ever matters
-  // more than depth, lower it per call with -r, explicitly and visibly.
+  // check and quietly get a worse thinker than every other pass. There is deliberately
+  // no per-call escape hatch: `-r` and `--reasoning` are retired flags and are refused
+  // (see RETIRED_FLAGS in cli.ts). Bound the question, not the thinking.
   mechanical: {
     description: "Mechanical house-rule/pattern checks against a supplied diff.",
     kind: "mechanical",

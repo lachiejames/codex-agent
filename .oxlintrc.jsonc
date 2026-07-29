@@ -17,17 +17,6 @@
   "ignorePatterns": ["**/coverage/**", "**/dist/**", "**/node_modules/**"],
   "overrides": [
     {
-      // These two files exist to strip terminal control characters out of scraped tmux panes, so
-      // matching control characters IS their purpose and `no-control-regex` cannot be satisfied
-      // without breaking them.
-      //
-      // Both are slated for deletion once the `codex exec --json` transport replaces the TUI —
-      // the whole reason they exist is that a scraped pane could not be trusted. DELETE THIS
-      // OVERRIDE ALONG WITH THEM; if it outlives them, something reintroduced pane scraping.
-      "files": ["src/output-cleaner.ts", "src/session-parser.ts"],
-      "rules": { "no-control-regex": "allow" }
-    },
-    {
       "files": ["**/*.test.ts"],
       "rules": {
         // Tests deliberately split string literals so a scanner/checker under test doesn't match its

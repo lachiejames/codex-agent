@@ -173,8 +173,9 @@ nobody chose. You pass `--timeout` on every call.
 
 **Every pass runs `gpt-5.6-sol` at `xhigh`.** The model and effort are passed as `-c model=`
 and `-c model_reasoning_effort=`, which _override_ `~/.codex/config.toml` — so `src/config.ts`
-and this table, not that file, are what actually reaches Codex. Lower it per call with `-r` if
-you ever need to: visibly, never silently.
+and this table, not that file, are what actually reaches Codex. There is **no flag to lower
+either**: `-m`, `--model`, `-r` and `--reasoning` are retired and are refused with the reason.
+Bound the question, not the thinking.
 
 ---
 
@@ -496,7 +497,7 @@ bash ~/dev/personal/codex-agent/plugins/codex-agent/scripts/install.sh
 ```
 
 Model and effort come from `src/config.ts` (`gpt-5.6-sol`, `xhigh`) and are passed as `-c`
-overrides, so they beat `~/.codex/config.toml` and `-m`/`-r` are almost never needed.
+overrides, so they beat `~/.codex/config.toml`. Neither is selectable per call — see above.
 
 ---
 
