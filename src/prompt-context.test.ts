@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { estimateTokens } from "./files.ts";
-import { buildPromptContext, estimatePromptText, readCartographerMapMetadata } from "./prompt-context.ts";
+import {
+  assemblePromptContext,
+  buildPromptContext,
+  estimatePromptText,
+  readCartographerMapMetadata,
+} from "./prompt-context.ts";
 
 describe("readCartographerMapMetadata", () => {
   test("reads total_tokens from Cartographer frontmatter", () => {
@@ -98,5 +103,45 @@ describe("buildPromptContext", () => {
     expect(result.accounting.map.path).toBe(realpathSync.native(mapPath));
     expect(result.accounting.map.estimatedTokens).toBe(estimateTokens(map));
     expect(result.accounting.map.cartographerTotalTokens).toBe(42);
+  });
+});
+
+describe("assemblePromptContext", () => {
+  test("returns the task prompt alone when there is no map", () => {
+    const built = assemblePromptContext("do the thing", null);
+    expect(built.prompt).toBe("do the thing");
+    expect(built.accounting.map.included).toBe(false);
+    expect(built.accounting.map.path).toBe(null);
+    expect(built.accounting.map.bytes).toBe(0);
+    expect(built.accounting.map.estimatedTokens).toBe(0);
+    expect(built.accounting.components.map((c) => c.kind)).toEqual(["task_prompt"]);
+  });
+
+  test("wraps the map before the task prompt, in the order Codex receives it", () => {
+    const built = assemblePromptContext("do the thing", {
+      ambiguousWith: [],
+      content: "# Map\n",
+      path: "/repo/docs/CODEBASE_MAP.md",
+    });
+    expect(built.accounting.map.included).toBe(true);
+    expect(built.accounting.map.path).toBe("/repo/docs/CODEBASE_MAP.md");
+    expect(built.accounting.components.map((c) => c.kind)).toEqual(["map_wrapper", "codebase_map", "task_prompt"]);
+    expect(built.prompt.endsWith("do the thing")).toBe(true);
+    expect(built.prompt).toContain("# Map\n");
+  });
+
+  test("accounts the task prompt separately from the whole prompt", () => {
+    const built = assemblePromptContext("abc", { ambiguousWith: [], content: "# Map\n", path: null });
+    expect(built.accounting.taskPrompt.bytes).toBe(3);
+    expect(built.accounting.bytes).toBeGreaterThan(built.accounting.taskPrompt.bytes);
+  });
+
+  test("reports the case variants that were not chosen", () => {
+    const built = assemblePromptContext("x", {
+      ambiguousWith: ["/repo/docs/codebase_map.md"],
+      content: "# Map\n",
+      path: "/repo/docs/CODEBASE_MAP.md",
+    });
+    expect(built.accounting.map.ambiguousWith).toEqual(["/repo/docs/codebase_map.md"]);
   });
 });

@@ -74,28 +74,38 @@ export function readCartographerMapMetadata(mapContent: string): CartographerMap
   return { totalTokens: null };
 }
 
-// max-lines-exempt: 7 lines over, and it assembles the prompt components in the exact order
-// they reach Codex. The pure accounting half is extracted separately in this series; what is
-// left is the ordered assembly itself.
-export async function buildPromptContext(options: BuildPromptContextOptions): Promise<BuiltPromptContext> {
-  const taskComponent = buildComponent("task_prompt", "Task prompt", options.taskPrompt);
+/**
+ * A codebase map that is definitely present and non-empty.
+ *
+ * `null` rather than an empty content string is what the assembler is given for "no map", so the
+ * distinction between "no map wanted", "none found" and "found but empty" is resolved once, in
+ * the shell, instead of being re-derived from a falsy string further in.
+ */
+export interface ResolvedCodebaseMap {
+  readonly content: string;
+  readonly path: string | null;
+  /** Case variants of the resolved map that also exist and were not chosen. */
+  readonly ambiguousWith: readonly string[];
+}
+
+/**
+ * Assemble the prompt and its accounting. Pure: no filesystem, no cwd, no clock.
+ *
+ * This is the half worth testing — the byte and token accounting that `--dry-run` prints and
+ * that decides whether a 23KB map is silently doubling the size of a planning prompt. It used to
+ * be reachable only through a function that hit the disk first.
+ *
+ * @param taskPrompt the caller's prompt, always last in the assembled text
+ * @param map the resolved map, or null for no map at all
+ * @returns the assembled prompt plus its full accounting
+ */
+export function assemblePromptContext(taskPrompt: string, map: ResolvedCodebaseMap | null): BuiltPromptContext {
+  const taskComponent = buildComponent("task_prompt", "Task prompt", taskPrompt);
   const components: PromptContextComponent[] = [];
-
-  let mapContent: string | null = null;
-  let mapPath: string | null = null;
-  let mapAmbiguousWith: string[] = [];
-
-  if (options.includeMap) {
-    if (options.mapContent !== undefined) {
-      mapContent = options.mapContent;
-      mapPath = options.mapPath ?? null;
-    } else {
-      const map = await findCodebaseMap(options.cwd ?? process.cwd());
-      mapContent = map?.content ?? null;
-      mapPath = map?.path ?? null;
-      mapAmbiguousWith = map?.ambiguousWith ?? [];
-    }
-  }
+  const options = { taskPrompt };
+  const mapContent = map?.content ?? null;
+  const mapPath = map?.path ?? null;
+  const mapAmbiguousWith = [...(map?.ambiguousWith ?? [])];
 
   if (!mapContent) {
     components.push(taskComponent);
@@ -143,6 +153,31 @@ export async function buildPromptContext(options: BuildPromptContextOptions): Pr
     },
     prompt,
   };
+}
+
+/**
+ * Resolve which map, if any, this invocation is using. The only effectful step.
+ *
+ * Three cases, and they were previously tangled with the assembly: no map asked for, a map
+ * supplied inline by the caller (which `--dry-run` and the tests use), or a lookup against the
+ * working directory. An empty map file collapses to null here so the assembler sees one shape.
+ */
+async function resolveCodebaseMap(options: BuildPromptContextOptions): Promise<ResolvedCodebaseMap | null> {
+  if (!options.includeMap) return null;
+
+  if (options.mapContent !== undefined) {
+    if (!options.mapContent) return null;
+    return { ambiguousWith: [], content: options.mapContent, path: options.mapPath ?? null };
+  }
+
+  const map = await findCodebaseMap(options.cwd ?? process.cwd());
+  if (!map?.content) return null;
+  return { ambiguousWith: map.ambiguousWith ?? [], content: map.content, path: map.path ?? null };
+}
+
+/** Resolve the map, then assemble. The effectful shell over {@link assemblePromptContext}. */
+export async function buildPromptContext(options: BuildPromptContextOptions): Promise<BuiltPromptContext> {
+  return assemblePromptContext(options.taskPrompt, await resolveCodebaseMap(options));
 }
 
 function buildComponent(kind: PromptContextComponentKind, label: string, text: string): PromptContextComponent {
