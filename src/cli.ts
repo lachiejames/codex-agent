@@ -141,10 +141,9 @@ interface Options {
   sandboxExplicit: boolean;
 }
 
-// max-lines-exempt: one flag-dispatch switch, being extracted in this series. Its length is the
-// number of flags, not nested logic. Decomposed in a later commit on this branch.
-function parseArgs(args: string[]): { command: string; positional: string[]; options: Options } {
-  const options: Options = {
+/** Every option at its default. `--timeout` deliberately starts null: there is no default bound. */
+function defaultOptions(): Options {
+  return {
     all: false,
     allowUnscoped: false,
     contractEnabled: true,
@@ -162,18 +161,58 @@ function parseArgs(args: string[]): { command: string; positional: string[]; opt
     wait: false,
     wordCap: undefined,
   };
+}
 
+/** A flag's numeric value, or exit 1 with the label the caller used. */
+function requireNumber(raw: string | undefined, label: string, minimum: number): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < minimum) {
+    console.error(`Invalid ${label}: ${raw}`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
+/** Validate `-s/--sandbox`, or exit 1 listing the valid modes. */
+function requireSandboxMode(raw: string | undefined): SandboxMode {
+  const mode = raw as SandboxMode;
+  if (!config.sandboxModes.includes(mode)) {
+    console.error(`Invalid sandbox mode: ${mode}`);
+    console.error(`Valid options: ${config.sandboxModes.join(", ")}`);
+    process.exit(1);
+  }
+  return mode;
+}
+
+/** Validate `--pass`, or exit 1 listing the valid pass kinds. */
+function requirePassKind(raw: string | undefined): PassKind {
+  if (!raw || !isPassKind(raw)) {
+    console.error(`Invalid pass kind: ${raw}`);
+    console.error(`Valid options: ${PASS_KINDS.join(", ")}`);
+    process.exit(1);
+  }
+  return raw;
+}
+
+/**
+ * Reject an unrecognised flag.
+ *
+ * An unrecognised flag is an ERROR, never ignored. The parser used to fall through on anything
+ * it did not recognise, which was harmless while every flag existed. It stopped being harmless
+ * the moment `-r` and `-m` were removed: `-r low` would have dropped the flag AND appended "low"
+ * to the prompt as a positional, silently corrupting the question being asked.
+ */
+function failUnknownFlag(arg: string): never {
+  const retired = RETIRED_FLAGS[arg];
+  console.error(retired ? `${arg} was removed. ${retired}` : `Unknown option: ${arg}`);
+  console.error("Run `codex-agent --help` for the current flags.");
+  process.exit(1);
+}
+
+function parseArgs(args: string[]): { command: string; positional: string[]; options: Options } {
+  const options = defaultOptions();
   const positional: string[] = [];
   let command = "";
-
-  function requireNumber(raw: string | undefined, label: string, minimum: number): number {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed < minimum) {
-      console.error(`Invalid ${label}: ${raw}`);
-      process.exit(1);
-    }
-    return parsed;
-  }
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -182,13 +221,7 @@ function parseArgs(args: string[]): { command: string; positional: string[]; opt
       console.log(HELP);
       process.exit(0);
     } else if (arg === "-s" || arg === "--sandbox") {
-      const mode = args[++index] as SandboxMode;
-      if (!config.sandboxModes.includes(mode)) {
-        console.error(`Invalid sandbox mode: ${mode}`);
-        console.error(`Valid options: ${config.sandboxModes.join(", ")}`);
-        process.exit(1);
-      }
-      options.sandbox = mode;
+      options.sandbox = requireSandboxMode(args[++index]);
       options.sandboxExplicit = true;
     } else if (arg === "-w" || arg === "--wait") {
       options.wait = true;
@@ -205,13 +238,7 @@ function parseArgs(args: string[]): { command: string; positional: string[]; opt
     } else if (arg === "--all") {
       options.all = true;
     } else if (arg === "--pass") {
-      const kind = args[++index];
-      if (!kind || !isPassKind(kind)) {
-        console.error(`Invalid pass kind: ${kind}`);
-        console.error(`Valid options: ${PASS_KINDS.join(", ")}`);
-        process.exit(1);
-      }
-      options.passKind = kind;
+      options.passKind = requirePassKind(args[++index]);
     } else if (arg === "--property") {
       options.property = args[++index] ?? null;
     } else if (arg === "--timeout") {
@@ -226,16 +253,7 @@ function parseArgs(args: string[]): { command: string; positional: string[]; opt
     } else if (arg === "--no-contract") {
       options.contractEnabled = false;
     } else if (arg !== undefined && arg.startsWith("-")) {
-      // An unrecognised flag is an ERROR, never ignored.
-      //
-      // The parser used to fall through on anything it did not recognise, which was harmless
-      // while every flag existed. It stopped being harmless the moment `-r` and `-m` were
-      // removed: `-r low` would have dropped the flag AND appended "low" to the prompt as a
-      // positional, silently corrupting the question being asked.
-      const retired = RETIRED_FLAGS[arg];
-      console.error(retired ? `${arg} was removed. ${retired}` : `Unknown option: ${arg}`);
-      console.error("Run `codex-agent --help` for the current flags.");
-      process.exit(1);
+      failUnknownFlag(arg);
     } else if (arg !== undefined) {
       if (command) positional.push(arg);
       else command = arg;
