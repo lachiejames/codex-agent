@@ -1,13 +1,16 @@
 ---
-last_mapped: 2026-07-29T13:00:00Z
-total_files: 24
-total_tokens: 5727
+last_mapped: 2026-07-29T20:00:00Z
 ---
 
 # Codebase Map
 
-> Written by hand against the tree at `last_mapped`, not generated. Every line count below
-> comes from `wc -l src/*.ts` on that date.
+> Written by hand against the tree at `last_mapped`, not generated.
+>
+> Deliberately carries NO file counts, line counts or token totals. It used to, and they were
+> wrong within a day — it claimed 24 files when there were 28, and `cli.ts` at 686 lines when it
+> was 702. This file is injected VERBATIM into every `--map` planning prompt, so a stale number
+> here is not untidy, it actively misleads the pass being paid the most for. Modules are described
+> by what they own; run `wc -l src/*.ts` if you want a number.
 
 ## System Overview
 
@@ -94,24 +97,28 @@ graph TB
 codex-agent/
 ├── bin/
 │   └── codex-agent               # Shell wrapper: exec bun src/cli.ts "$@"
-├── src/                          # 3,821 lines of module + 2,532 of test
-│   ├── cli.ts             686    # Commands, flags, help. Thin by design
-│   ├── contract.ts        583    # The invocation contract + the ledger
-│   ├── supervisor.ts      487    # One process per run, for the run's whole life
-│   ├── run-store.ts       396    # The Run record and its artifacts
-│   ├── event-stream.ts    351    # Parsing `codex exec --json`. Pure
-│   ├── run-commands.ts    220    # launch / send / refresh / kill
-│   ├── report.ts          200    # How a finished run should be read
-│   ├── files.ts           187    # Codebase-map lookup
-│   ├── bounds.ts          166    # continue | warn | kill. Pure
-│   ├── prompt-context.ts  151    # Prompt assembly + token accounting
-│   ├── runner.ts          126    # Building `codex exec` argv. Pure
-│   ├── answer-store.ts    120    # Durable untruncated answers
-│   ├── run-report.ts      109    # Run -> ledger row, Run -> report
-│   ├── config.ts           39    # Model, effort, sandbox, jobs dir
-│   └── *.test.ts                 # 10 test files, one per module with logic
+├── src/
+│   ├── cli.ts                    # Commands, flags, help. Parses, applies the contract, prints
+│   ├── contract.ts               # The invocation contract + the ledger row. Pure
+│   ├── supervisor.ts             # One process per run, for the run's whole life
+│   ├── run-store.ts              # The Run record and its artifacts
+│   ├── event-stream.ts           # Parsing `codex exec --json`. Pure
+│   ├── run-commands.ts           # launch / send / refresh / kill
+│   ├── report.ts                 # How a finished run should be read. Pure
+│   ├── files.ts                  # Codebase-map lookup, against real directory entries
+│   ├── bounds.ts                 # continue | warn | kill, and formatElapsed. Pure
+│   ├── prompt-context.ts         # Pure prompt assembly + accounting, over a map-lookup shell
+│   ├── runner.ts                 # Building `codex exec` argv. Pure. Owns the flag asymmetry
+│   ├── answer-store.ts           # Durable untruncated answers
+│   ├── run-report.ts             # Pure Run -> ledger/report/progress, over a clock+disk shell
+│   ├── config.ts                 # Model, effort, sandbox, jobs dir. No timeout default
+│   ├── gate/                     # `bun run validate`: the one check list. Pure core + shell
+│   ├── check-conventions/        # Function length, node: imports, duplicate implementations
+│   ├── check-test-discipline/    # No skipped, mocked or weakly-asserted tests
+│   └── *.test.ts                 # Co-located, one per module with logic
 ├── docs/
 │   ├── SPEC.md                   # The eleven behaviours. Authoritative
+│   ├── CONVENTIONS.md            # What this repo holds to, and what a machine checks
 │   ├── CODEBASE_MAP.md           # This file. Injected verbatim by --map
 │   └── prompts.md                # Paste-able prompts for a fresh Claude chat
 ├── plugins/codex-agent/          # The Claude Code plugin (the one skill)
