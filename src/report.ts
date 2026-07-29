@@ -114,7 +114,7 @@ export interface RunReport {
   readonly status: "pending" | "running" | "completed" | "failed";
   /** The prompt as sent. */
   readonly asked: string;
-  readonly answers: StoredAnswer[];
+  readonly answers: readonly StoredAnswer[];
   /**
    * True when the answers shown are the old 500-character previews rather than durable
    * captures. Must be surfaced: a truncated answer read as a whole one is how a review's
