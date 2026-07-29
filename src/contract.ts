@@ -20,7 +20,7 @@
 // effort to make review terminate would trade away the exact capability being paid
 // for. The fix is to bound the *question*, not the thinking.
 
-import type { KillReason } from "./bounds.ts";
+import { formatElapsed, type KillReason } from "./bounds.ts";
 import type { SandboxMode } from "./config.ts";
 
 // --------------------------------------------------------------------------
@@ -433,16 +433,6 @@ export interface HeartbeatReport {
 
 export const DEFAULT_HEARTBEAT_MINUTES = 5;
 export const DEFAULT_HEARTBEAT_EXECS = 40;
-
-/** Exported for guards.ts, so a breach message reads the same as a heartbeat one. */
-export function formatElapsed(ms: number): string {
-  const totalMinutes = Math.floor(ms / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours > 0) return `${hours}h${minutes.toString().padStart(2, "0")}m`;
-  if (totalMinutes > 0) return `${totalMinutes}m`;
-  return `${Math.floor(ms / 1000)}s`;
-}
 
 /**
  * Decide whether to report non-convergence.

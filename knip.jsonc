@@ -1,0 +1,29 @@
+{
+  // Dead-code detection. Ported from ~/dev/personal/slopweaver.
+  //
+  // `.jsonc` rather than `.json` so these decisions live next to what they affect, the way
+  // `.oxlintrc.jsonc` and `biome.jsonc` do. knip reads either.
+  //
+  // On main this file was configured, installed, and run by NO gate, so it sat at exit 1
+  // reporting three dead exports nobody saw. It is now part of `bun run validate`.
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+
+  // `supervisor.ts` is a real second entry point: the CLI re-execs it as a detached process,
+  // which knip cannot see, so without it every supervisor-only export reads as dead.
+  "entry": ["src/cli.ts", "src/supervisor.ts", "src/**/*.test.ts"],
+  "ignoreExportsUsedInFile": true,
+  "project": ["src/**/*.ts"],
+
+  // `duplicates` stays OFF, and this is a measured decision rather than an inherited default.
+  //
+  // The defect it looks like it would catch, it does not. `formatElapsed` existed VERBATIM in
+  // both bounds.ts and contract.ts; with that duplicate present and this rule set to "error",
+  // knip still exited 0. The rule finds a single file exporting one binding twice (a named
+  // export plus a default, say) — NOT one identifier implemented in two files, which is the
+  // class that actually occurred here.
+  //
+  // Enabling it would therefore add the appearance of a guard without the guard. The real
+  // check for cross-file duplicate implementations lives in src/check-conventions/, which
+  // fails on a duplicated exported function name.
+  "rules": { "duplicates": "off" }
+}

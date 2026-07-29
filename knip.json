@@ -1,7 +1,0 @@
-{
-  "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["src/cli.ts", "src/supervisor.ts", "src/**/*.test.ts"],
-  "ignoreExportsUsedInFile": true,
-  "project": ["src/**/*.ts"],
-  "rules": { "duplicates": "off" }
-}

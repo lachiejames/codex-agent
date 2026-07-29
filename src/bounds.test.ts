@@ -188,6 +188,14 @@ describe("formatElapsed", () => {
     expect(formatElapsed(10 * MINUTE)).toBe("10m");
   });
 
+  // The one-minute boundary, pinned exactly. contract.ts carried a verbatim second copy of
+  // this function that spelled the same constant `60000` where this one spells `60_000`; the
+  // duplicate is gone and both callers share this implementation, so the seam is here.
+  it("switches from seconds to minutes exactly at one minute", () => {
+    expect(formatElapsed(MINUTE - 1)).toBe("59s");
+    expect(formatElapsed(MINUTE)).toBe("1m");
+  });
+
   it("renders hours and zero-padded minutes", () => {
     expect(formatElapsed(110 * MINUTE)).toBe("1h50m");
     expect(formatElapsed(65 * MINUTE)).toBe("1h05m");
