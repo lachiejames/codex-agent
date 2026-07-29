@@ -76,6 +76,18 @@ else
   bad "bun test FAILED — see /tmp/codex-agent-verify-tests.log"
 fi
 
+if (cd "$REPO" && bun run typecheck >/tmp/codex-agent-verify-tsc.log 2>&1); then
+  ok "typecheck clean"
+else
+  bad "typecheck FAILED ($(grep -c 'error TS' /tmp/codex-agent-verify-tsc.log) errors) — see /tmp/codex-agent-verify-tsc.log"
+fi
+
+if (cd "$REPO" && bun run lint >/tmp/codex-agent-verify-lint.log 2>&1); then
+  ok "oxlint clean"
+else
+  bad "oxlint FAILED — see /tmp/codex-agent-verify-lint.log"
+fi
+
 # ---------------------------------------------------------------------------
 section "3. Contract enforcement (the 1h50m failure must be unrepresentable)"
 
@@ -151,19 +163,58 @@ if [ "$DO_SKILLS" = "1" ]; then
   #
   # Uses a login shell so the wrapper is in scope, and `claude` must be reached as a shell
   # FUNCTION — `timeout claude` would exec the binary directly and bypass it.
+  #
+  # THE SENTINEL, and why this is not a weakened assertion.
+  #
+  # This check used to score an empty probe as "the skill did NOT load". But empty also means the
+  # timeout expired, or `claude -p` errored, or the model answered in a shape the grep missed. One
+  # observation, two incompatible causes — which is why it went red once and green twice in a row
+  # during PR #1 with nothing having changed.
+  #
+  # The fix is NOT to swap the live probe for a filesystem check. "No rival skill files exist on
+  # disk" is a strictly weaker claim than "Claude loads exactly one door", and only the live probe
+  # can make the strong one. Instead the probe now returns a sentinel that proves it ran at all,
+  # independently of what it found. So:
+  #
+  #   sentinel absent  -> the measurement did not happen. Retry; if it never happens, FAIL as
+  #                       INCONCLUSIVE. Never pass, never skip.
+  #   sentinel present -> the answer is authoritative and compared as an exact set. An empty set now
+  #                       means what it says: the skill genuinely is not loaded.
+  #
+  # Retrying a measurement that did not occur is not weakening. Retrying until green would be, which
+  # is why a sentinel-bearing wrong answer fails immediately with no retry.
+  probe_codex_skills() {
+    timeout 150 zsh -lic "cd '$1' && claude -p \
+      'Reply with the exact line PROBE-OK on its own line. Then list every skill you have whose name
+       contains the word codex, one exact name per line. If there are none, output only PROBE-OK.
+       No other text, no explanation.'" 2>/dev/null
+  }
+
   for probe in "$HOME/dev/personal/codex-agent" "$HOME" "$HOME/dev/ev-admin"; do
     [ -d "$probe" ] || continue
     label="${probe/#$HOME/~}"
-    names=$(timeout 250 zsh -lic "cd '$probe' && claude -p \
-      'List every skill you have whose name contains codex. Exact names, one per line, nothing else.'" \
-      2>/dev/null | grep -oE '[A-Za-z0-9_.:-]*codex[A-Za-z0-9_.:-]*' | sort -u)
 
-    if [ -z "$names" ]; then
-      bad "$label: the codex-agent skill did NOT load — is the claude() wrapper in ~/.zshrc?"
+    raw=""
+    for attempt in 1 2 3; do
+      candidate="$(probe_codex_skills "$probe")"
+      if grep -q 'PROBE-OK' <<<"$candidate"; then
+        raw="$candidate"
+        break
+      fi
+    done
+
+    if [ -z "$raw" ]; then
+      bad "$label: probe INCONCLUSIVE after 3 attempts — 'claude -p' never returned the sentinel."
+      bad "$label:   this is a measurement failure, not a pass. Check the claude() wrapper in ~/.zshrc."
       continue
     fi
+
+    names=$(grep -oE '[A-Za-z0-9_.:-]*codex[A-Za-z0-9_.:-]*' <<<"$raw" | sort -u)
+
     if [ "$names" = "codex-agent:codex-agent" ]; then
       ok "$label: exactly one door (codex-agent:codex-agent)"
+    elif [ -z "$names" ]; then
+      bad "$label: the probe ANSWERED and no codex skill is visible — the skill is not loading."
     else
       bad "$label: more than one Codex route visible:"
       printf '        %s\n' $names
@@ -205,6 +256,39 @@ if [ "$DO_LIVE" = "1" ]; then
       ok "reached $verdict in ${elapsed}s (bound was 6m)"
     else
       bad "no verdict in ${elapsed}s — check: codex-agent ledger"
+    fi
+
+    # ---------------------------------------------------------------------
+    # THE GATE MUST DETECT ITS OWN INSTRUMENTS DYING.
+    #
+    # `extractSessionId` stopped matching when Codex 0.145.0 stopped printing a session id.
+    # It took the exec count and the token totals with it, and NOTHING WENT RED — because
+    # nothing asserted the numbers were still arriving. Every metric silently read as
+    # "unavailable" for an unknown number of releases.
+    #
+    # So: after a live run that demonstrably worked, the ledger must actually carry numbers.
+    # Asserted as NON-NULL rather than non-zero, because `execCount: 0` is the healthy
+    # signature of a scoped pass (the shaped prompt tells the agent not to read other files)
+    # while `null` means the measurement is dead. Conflating those two is the whole bug.
+    job_id=$(grep -oE '^Job started: [0-9a-f]+' <<<"$out" | head -1 | awk '{print $3}')
+    if [ -z "$job_id" ]; then
+      bad "could not read a job id out of the live run — cannot verify metric liveness"
+    else
+      row=$("${CLI[@]}" ledger --json --all 2>/dev/null \
+        | jq -r --arg id "$job_id" '.runs[] | select(.jobId==$id) | "\(.tokensSpent)|\(.execCount)"')
+      spent="${row%%|*}"
+      execs="${row##*|}"
+
+      if [ -z "$row" ]; then
+        bad "job $job_id produced no ledger row at all"
+      else
+        [ "$spent" != "null" ] \
+          && ok "ledger reports token spend ($spent) — the usage instrument is alive" \
+          || bad "ledger tokensSpent is null after a working run — the usage instrument is DEAD"
+        [ "$execs" != "null" ] \
+          && ok "ledger reports an exec count ($execs) — the exec instrument is alive" \
+          || bad "ledger execCount is null after a working run — the exec instrument is DEAD"
+      fi
     fi
 
     # Anchored on the CLI's own report line, not on the word appearing anywhere in $out.

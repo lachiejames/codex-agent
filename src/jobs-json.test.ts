@@ -29,7 +29,6 @@ const SECOND = 1000;
 
 function jobFixture(overrides: Partial<Job> & Pick<Job, "id">): Job {
   return {
-    id: overrides.id,
     status: "running",
     prompt: "Test prompt",
     model: "gpt-5.5",

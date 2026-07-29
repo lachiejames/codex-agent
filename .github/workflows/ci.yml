@@ -3,9 +3,7 @@ name: CI
 # This repo is the ONE DOOR to Codex for every project on this machine, and it had no CI at all —
 # every PR merged on local evidence alone. That is the gap this closes.
 #
-# Deliberately narrow: it proves the suite passes and the shipped CLI builds. It does NOT typecheck,
-# because there is no `tsconfig.json` in the repo yet — adding one is a separate change, not something
-# to smuggle into a CI workflow. See the note at the bottom.
+# It proves the suite passes, the types check, and the shipped CLI builds.
 
 on:
   push:
@@ -42,6 +40,13 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # Runs before the tests: a type error is a faster and more specific failure than
+      # whatever the suite happens to throw downstream of it. Adding this found a real
+      # signature bug (normalizeJobLifecycle claimed to return the caller's turnState while
+      # overwriting it) and four dead duplicate keys in test fixtures.
+      - name: Typecheck
+        run: bun run typecheck
+
       - name: Test
         run: bun test
 
@@ -51,8 +56,5 @@ jobs:
         run: bun run build
 
 # FOLLOW-UP, deliberately not done here:
-#   - No typecheck step. `typescript` is a devDependency but there is no `tsconfig.json`, so
-#     `tsc --noEmit` would run on defaults and fail on module resolution rather than on real type
-#     errors. Add a tsconfig in its own change, then add the step.
-#   - No lint step. There is no linter configured yet.
-#   Both are worth doing; neither belongs in the same commit as "give this repo a CI at all".
+#   - No lint step. There is no linter configured yet, and adding one mid-migration would bury
+#     real diffs under formatting churn. Worth doing once the transport rewrite has landed.

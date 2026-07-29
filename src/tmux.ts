@@ -349,7 +349,10 @@ export function listSessions(): TmuxSession[] {
       .split("\n")
       .filter((line) => line.startsWith(config.tmuxPrefix))
       .map((line) => {
-        const [name, attached, windows, created] = line.split("|");
+        // The -F format string above always emits four fields, so the defaults are
+        // unreachable; they exist so a malformed line degrades exactly as it did
+        // before (empty parses to NaN, same as an absent field did).
+        const [name = "", attached = "", windows = "", created = ""] = line.split("|");
         return {
           name,
           attached: attached === "1",

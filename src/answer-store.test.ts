@@ -64,7 +64,7 @@ describe("appendAnswer", () => {
     // real content survives rather than pretending otherwise.
     expect(readAnswerFile("job1")).toContain("Example of the format:");
     expect(answers.length).toBeGreaterThanOrEqual(1);
-    expect(answers[0].turnId).toBe("t1");
+    expect(answers[0]?.turnId).toBe("t1");
   });
 
   test("ignores an empty answer", () => {
@@ -76,7 +76,7 @@ describe("appendAnswer", () => {
     appendAnswer("job1", { turnId: "t\n1|x", timestamp: "2026-07-29T00:00:00.000Z", text: "body" });
     const answers = readAnswers("job1");
     expect(answers).toHaveLength(1);
-    expect(answers[0].text).toBe("body");
+    expect(answers[0]?.text).toBe("body");
   });
 });
 

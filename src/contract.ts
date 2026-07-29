@@ -355,8 +355,8 @@ const VERDICT_PATTERN = /^\s*VERDICT:\s*(CLEAN|BROKEN)\b/im;
  */
 export function extractVerdict(text: string | null | undefined): string | null {
   if (!text) return null;
-  const match = text.match(VERDICT_PATTERN);
-  return match ? match[1].toUpperCase() : null;
+  const verdict = text.match(VERDICT_PATTERN)?.[1];
+  return verdict ? verdict.toUpperCase() : null;
 }
 
 export interface ShapePromptOptions {

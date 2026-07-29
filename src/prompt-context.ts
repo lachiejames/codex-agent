@@ -55,18 +55,18 @@ export function estimatePromptText(text: string): PromptContextTextEstimate {
 }
 
 export function readCartographerMapMetadata(mapContent: string): CartographerMapMetadata {
-  const frontmatterMatch = mapContent.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!frontmatterMatch) {
+  const frontmatter = mapContent.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
+  if (frontmatter === undefined) {
     return { totalTokens: null };
   }
 
-  for (const line of frontmatterMatch[1].split(/\r?\n/)) {
+  for (const line of frontmatter.split(/\r?\n/)) {
     const fieldMatch = line.match(/^total_tokens:\s*(.+?)\s*$/);
     if (!fieldMatch) {
       continue;
     }
 
-    const normalized = fieldMatch[1].replace(/["',_]/g, "");
+    const normalized = (fieldMatch[1] ?? "").replace(/["',_]/g, "");
     const totalTokens = Number.parseInt(normalized, 10);
     return { totalTokens: Number.isFinite(totalTokens) ? totalTokens : null };
   }

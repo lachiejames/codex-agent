@@ -107,7 +107,7 @@ describe("contract enforcement", () => {
     expect(decision.ok).toBe(false);
     expect(decision.passKind).toBe("review");
     expect(decision.violations.map((v) => v.code)).toContain("unscoped_verification");
-    expect(decision.violations[0].remedy).toContain("git diff");
+    expect(decision.violations[0]?.remedy).toContain("git diff");
   });
 
   test("allows a verification pass once scope is supplied", () => {
@@ -152,7 +152,7 @@ describe("contract enforcement", () => {
 
       expect(decision.ok).toBe(false);
       expect(decision.violations.map((v) => v.code)).toContain("unratcheted_bypass");
-      expect(decision.violations[0].message).toContain("inferred rather than named");
+      expect(decision.violations[0]?.message).toContain("inferred rather than named");
     });
 
     test("refuses a bypass with no real subject supplied inline", () => {
@@ -165,7 +165,7 @@ describe("contract enforcement", () => {
 
       expect(decision.ok).toBe(false);
       expect(decision.violations.map((v) => v.code)).toContain("unratcheted_bypass");
-      expect(decision.violations[0].message).toContain("characters");
+      expect(decision.violations[0]?.message).toContain("characters");
     });
 
     test("honours the documented P3 stress-test, which is the one legitimate use", () => {

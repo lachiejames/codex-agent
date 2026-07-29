@@ -39,10 +39,10 @@ const EXEC_TOOL_NAMES = new Set<string>([
 const SESSION_EXTENSIONS = new Set<string>([".jsonl", ".json"]);
 
 function getCodexHome(): string | null {
-  const configured = process.env.CODEX_HOME;
+  const configured = process.env["CODEX_HOME"];
   if (configured && configured.trim()) return configured;
-  if (!process.env.HOME) return null;
-  return join(process.env.HOME, ".codex");
+  if (!process.env["HOME"]) return null;
+  return join(process.env["HOME"], ".codex");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -68,9 +68,9 @@ function extractAssistantText(content: unknown): string | null {
 
   for (const part of content) {
     if (!isRecord(part)) continue;
-    const type = part.type;
+    const type = part["type"];
     if (type !== "output_text" && type !== "text" && type !== "input_text") continue;
-    const text = part.text;
+    const text = part["text"];
     if (typeof text === "string") parts.push(text);
   }
 
@@ -106,7 +106,7 @@ function extractPatchText(raw: unknown): string | null {
   const parsed = parseJsonLine(trimmed);
   if (!isRecord(parsed)) return null;
 
-  const patchValue = parsed.patch ?? parsed.input;
+  const patchValue = parsed["patch"] ?? parsed["input"];
   if (typeof patchValue === "string" && patchValue.includes("*** Begin Patch")) {
     return patchValue;
   }
@@ -115,12 +115,12 @@ function extractPatchText(raw: unknown): string | null {
 }
 
 function parseTokensFromInfo(info: Record<string, unknown>): SessionTokens | null {
-  const totalUsage = info.total_token_usage;
+  const totalUsage = info["total_token_usage"];
   if (!isRecord(totalUsage)) return null;
 
-  const inputTokens = toNumber(totalUsage.input_tokens);
-  const outputTokens = toNumber(totalUsage.output_tokens);
-  const contextWindow = toNumber(info.model_context_window);
+  const inputTokens = toNumber(totalUsage["input_tokens"]);
+  const outputTokens = toNumber(totalUsage["output_tokens"]);
+  const contextWindow = toNumber(info["model_context_window"]);
 
   if (inputTokens === null || outputTokens === null || contextWindow === null) return null;
   const contextUsed = contextWindow > 0 ? (inputTokens / contextWindow) * 100 : 0;
@@ -145,39 +145,39 @@ function parseJsonlSession(content: string): ParsedSessionData {
     const record = parseJsonLine(line);
     if (!isRecord(record)) continue;
 
-    const recordType = typeof record.type === "string" ? record.type : null;
-    const payload = isRecord(record.payload) ? record.payload : null;
+    const recordType = typeof record["type"] === "string" ? record["type"] : null;
+    const payload = isRecord(record["payload"]) ? record["payload"] : null;
     if (!recordType || !payload) continue;
 
-    const payloadType = typeof payload.type === "string" ? payload.type : null;
+    const payloadType = typeof payload["type"] === "string" ? payload["type"] : null;
     if (recordType === "event_msg" && payloadType === "token_count") {
-      if (isRecord(payload.info)) {
-        const parsedTokens = parseTokensFromInfo(payload.info);
+      if (isRecord(payload["info"])) {
+        const parsedTokens = parseTokensFromInfo(payload["info"]);
         if (parsedTokens) tokens = parsedTokens;
       }
     }
 
     if (recordType === "event_msg" && payloadType === "agent_message") {
-      const message = payload.message;
+      const message = payload["message"];
       if (typeof message === "string") summary = message;
     }
 
     if (recordType === "response_item" && payloadType === "message") {
-      const role = payload.role;
+      const role = payload["role"];
       if (role === "assistant") {
-        const messageText = extractAssistantText(payload.content);
+        const messageText = extractAssistantText(payload["content"]);
         if (messageText) summary = messageText;
       }
     }
 
     if (recordType === "response_item") {
       const toolType = payloadType === "custom_tool_call" || payloadType === "function_call";
-      const toolName = typeof payload.name === "string" ? payload.name : null;
+      const toolName = typeof payload["name"] === "string" ? payload["name"] : null;
       if (toolType && toolName && EXEC_TOOL_NAMES.has(toolName)) {
         execCount += 1;
       }
       if (toolType && toolName === "apply_patch") {
-        const patchText = extractPatchText(payload.input ?? payload.arguments);
+        const patchText = extractPatchText(payload["input"] ?? payload["arguments"]);
         if (patchText) {
           for (const file of extractFilesFromPatch(patchText)) {
             filesModified.add(file);
@@ -200,12 +200,12 @@ function parseJsonSession(content: string): ParsedSessionData | null {
   if (!isRecord(parsed)) return null;
 
   let summary: string | null = null;
-  const items = parsed.items;
+  const items = parsed["items"];
   if (Array.isArray(items)) {
     for (const item of items) {
       if (!isRecord(item)) continue;
-      if (item.role !== "assistant") continue;
-      const messageText = extractAssistantText(item.content);
+      if (item["role"] !== "assistant") continue;
+      const messageText = extractAssistantText(item["content"]);
       if (messageText) summary = messageText;
     }
   }
@@ -317,17 +317,19 @@ export interface FindSessionForJobOptions {
  */
 export function findSessionFileForJob(options: FindSessionForJobOptions): string | null {
   const candidates = findSessionCandidates(options.cwd, options.startedAtMs, options.endedAtMs);
-  if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0].path;
+  const [firstCandidate] = candidates;
+  if (!firstCandidate) return null;
+  if (candidates.length === 1) return firstCandidate.path;
 
   const prompt = options.prompt?.trim();
   if (prompt) {
     const matches = candidates.filter((candidate) => sessionContainsPrompt(candidate.path, prompt));
     // Only trust the prompt match when it is unambiguous.
-    if (matches.length === 1) return matches[0].path;
+    const [onlyMatch] = matches;
+    if (matches.length === 1 && onlyMatch) return onlyMatch.path;
   }
 
-  let best = candidates[0];
+  let best = firstCandidate;
   for (const candidate of candidates) {
     if (candidate.distance < best.distance) best = candidate;
   }
@@ -424,9 +426,9 @@ function readSessionCwd(path: string): string | null {
     if (!firstLine) return null;
 
     const record = parseJsonLine(firstLine);
-    if (!isRecord(record) || record.type !== "session_meta") return null;
-    const payload = isRecord(record.payload) ? record.payload : null;
-    const cwd = payload?.cwd;
+    if (!isRecord(record) || record["type"] !== "session_meta") return null;
+    const payload = isRecord(record["payload"]) ? record["payload"] : null;
+    const cwd = payload?.["cwd"];
     return typeof cwd === "string" ? cwd : null;
   } catch {
     return null;

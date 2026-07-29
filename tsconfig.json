@@ -1,0 +1,48 @@
+{
+  // Ported from ~/dev/personal/slopweaver so this repo's TypeScript is held to the same bar as
+  // every other personal project. Every strictness flag there is set here identically.
+  //
+  // TWO forced deviations, both because this repo runs on Bun rather than compiling with tsc:
+  //
+  //   1. `noEmit` + `allowImportingTsExtensions` instead of `outDir`/`rootDir`/`sourceMap`.
+  //      The source imports with explicit `.ts` extensions, which is correct for Bun, and
+  //      `bun build` produces the shipped artifact. tsc's only job here is typechecking.
+  //      `allowImportingTsExtensions` is only legal alongside `noEmit`, so the two are a pair.
+  //   2. `module`/`moduleResolution` are "bundler", not "nodenext" — nodenext rejects
+  //      extensionless and `.ts`-suffixed relative imports.
+  //
+  // `types` additionally includes "bun" (slopweaver has only "node") because this codebase uses
+  // `bun:test`, the `Bun` global and `import.meta.dir`.
+  "compilerOptions": {
+    "allowJs": false,
+    "allowImportingTsExtensions": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "declaration": false,
+    "erasableSyntaxOnly": true,
+    "esModuleInterop": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "module": "esnext",
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "noUncheckedSideEffectImports": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "esnext",
+    "types": ["node", "bun"],
+    "useUnknownInCatchVariables": true
+  },
+  "exclude": ["node_modules", "dist"],
+  "include": ["src/**/*"]
+}
