@@ -55,6 +55,7 @@ import {
   releaseSupervisorLock,
   runArtifactPath,
   saveRun,
+  shouldResumeThread,
   takeSteer,
 } from "./run-store.ts";
 import { buildCodexArgv, readSandboxFromArgv } from "./runner.ts";
@@ -146,6 +147,23 @@ async function watchInvocation(run: Run, child: ChildProcess, turnStartedAtMs: n
       drainStream(run);
       saveRun(run);
       return { exitCode: exited, kind: "exited" };
+    }
+
+    // ONE RUN IS ONE THREAD. A second announcement means an invocation started a fresh
+    // conversation instead of resuming, which loses the context AND makes the recorded thread
+    // id describe a conversation that did not produce the answer. It was silent once; it is
+    // fatal now.
+    if (run.metrics.threadsAnnounced > 1) {
+      log(run.id, `FATAL: ${run.metrics.threadsAnnounced} threads announced for one run`);
+      await terminate(child);
+      return {
+        kind: "kill",
+        message:
+          `this run announced ${run.metrics.threadsAnnounced} Codex threads, but a run is exactly one ` +
+          `thread. An invocation started a new conversation instead of resuming, so the context and ` +
+          `the recorded thread id no longer agree. Stopping rather than recording a misattributed answer.`,
+        reason: "stalled",
+      };
     }
 
     const steer = takeSteer(run.id);
@@ -387,10 +405,12 @@ async function supervise(runId: string): Promise<number> {
   run.startedAt = run.startedAt ?? new Date().toISOString();
   run.turnStartedAt = run.turnStartedAt ?? run.startedAt;
   saveRun(run);
-  log(runId, `supervisor ${process.pid} started, bound ${run.timeoutMinutes}m`);
+  log(runId, `supervisor ${process.pid} started, bound ${run.timeoutMinutes}m, resume=${shouldResumeThread(run)}`);
 
   let prompt = run.prompt;
-  let resume = false;
+  // A run is a thread: resume whenever one already exists. Hardcoding `false` here meant every
+  // supervisor after the first silently started a NEW conversation. See shouldResumeThread.
+  let resume = shouldResumeThread(run);
   let turnStartedAtMs = Date.parse(run.turnStartedAt);
 
   for (;;) {

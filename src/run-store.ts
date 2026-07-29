@@ -219,6 +219,26 @@ export function isRunActive(run: Run): boolean {
   return run.status === "starting" || run.status === "running";
 }
 
+/**
+ * Does this supervisor resume an existing thread, or start a new one?
+ *
+ * A RUN IS A THREAD. So a supervisor starts a new one only when the run has none yet; every
+ * later supervisor for the same run must resume.
+ *
+ * This was hardcoded `false` in the supervisor's loop, which was correct for the first
+ * supervisor and wrong for every subsequent one. `send` on an idle run spawns a FRESH
+ * supervisor, so a multi-turn conversation silently began a second Codex thread: the context
+ * was gone, and — worse — the run record still reported the first thread id, so it claimed an
+ * answer belonged to a conversation that had not produced it. Two turns, two answers, both
+ * persisted, everything looking correct.
+ *
+ * Extracted here rather than left inline because supervisor.ts runs `main()` at import and so
+ * cannot be unit tested at all. This is the part worth asserting.
+ */
+export function shouldResumeThread(run: Pick<Run, "threadId">): boolean {
+  return Boolean(run.threadId);
+}
+
 /** Is a run finished, one way or another? */
 export function isRunTerminal(run: Run): boolean {
   return run.status === "completed" || run.status === "failed";

@@ -9,6 +9,9 @@
 #   bash scripts/verify-install.sh --live     # + a real Codex review run (~1m, needs auth)
 #   bash scripts/verify-install.sh --all
 #
+# Multi-turn, process-death and error paths are NOT covered here — they live in
+# scripts/verify-behaviours.sh, which takes ~6 minutes and spends real tokens.
+#
 # Exits non-zero listing every failure. Never fixes anything — this only reports.
 set -uo pipefail
 

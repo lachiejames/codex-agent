@@ -60,6 +60,19 @@ export type CodexEvent =
 export interface StreamMetrics {
   threadId: string | null;
   /**
+   * How many DISTINCT thread ids this stream has carried.
+   *
+   * A run is exactly one thread, so anything above 1 means an invocation began a new
+   * conversation instead of resuming. Counted rather than inferred, because the first-wins rule
+   * on `threadId` below deliberately hides a second id — which is exactly what let that bug run
+   * silently, with the record naming a thread that had not produced the answer.
+   *
+   * DISTINCT, not "announcements": `codex exec resume` re-emits `thread.started` carrying the
+   * SAME id, verified on 0.145.0. Counting announcements flagged every healthy multi-turn
+   * conversation as a violation.
+   */
+  threadsAnnounced: number;
+  /**
    * Total well-formed events seen. This is the runaway backstop's liveness signal.
    *
    * It replaces the previous transport's log size + mtime + inode triple, which needed five
@@ -96,6 +109,7 @@ export function emptyMetrics(): StreamMetrics {
     lastCommand: null,
     malformedLines: 0,
     threadId: null,
+    threadsAnnounced: 0,
     tokensSpent: null,
     turnsCompleted: 0,
     turnsStarted: 0,
@@ -252,10 +266,15 @@ export function foldEvent(metrics: StreamMetrics, event: CodexEvent): StreamMetr
 
   switch (event.kind) {
     case "thread.started":
-      // The FIRST thread id wins. A resumed invocation re-announces the same thread, but if a
-      // future Codex ever reported a different one mid-stream, silently adopting it would point
-      // every later `exec resume` at the wrong conversation.
-      next.threadId = metrics.threadId ?? event.threadId;
+      // The FIRST thread id wins. A resumed invocation re-announces the same thread; if a future
+      // Codex ever reported a DIFFERENT one mid-stream, silently adopting it would point every
+      // later `exec resume` at the wrong conversation.
+      if (metrics.threadId === null) {
+        next.threadId = event.threadId;
+        next.threadsAnnounced = 1;
+      } else if (metrics.threadId !== event.threadId) {
+        next.threadsAnnounced = metrics.threadsAnnounced + 1;
+      }
       return next;
 
     case "turn.started":

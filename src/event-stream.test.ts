@@ -340,3 +340,38 @@ describe("hasTurnInFlight", () => {
     expect(hasTurnInFlight(parseEventStream(`${FULL_RUN}\n${TURN_STARTED}`))).toBe(true);
   });
 });
+
+describe("threadsAnnounced — one run is one thread", () => {
+  it("counts a single announcement", () => {
+    expect(parseEventStream(FULL_RUN).threadsAnnounced).toBe(1);
+  });
+
+  it("is zero before any thread starts", () => {
+    expect(parseEventStream(TURN_STARTED).threadsAnnounced).toBe(0);
+  });
+
+  // `codex exec resume` re-emits thread.started with the SAME id — verified on 0.145.0. Every
+  // healthy multi-turn conversation does this, so it must not read as a violation. Counting
+  // announcements rather than distinct ids killed a working second turn in a live test.
+  it("does NOT count a resume re-announcing the same thread", () => {
+    const metrics = parseEventStream(`${THREAD_STARTED}\n${TURN_COMPLETED}\n${THREAD_STARTED}`);
+
+    expect(metrics.threadsAnnounced).toBe(1);
+    expect(metrics.threadId).toBe("019fab0d-6d23-7843-a421-2fec40fbc98c");
+  });
+
+  // The first-wins rule on threadId deliberately hides a second id, so counting distinct ids is
+  // what makes a genuine violation visible: a supervisor that started a NEW conversation instead
+  // of resuming was previously undetectable from the record.
+  it("counts a genuinely DIFFERENT thread id as a second thread", () => {
+    const other = `{"type":"thread.started","thread_id":"019fac1e-2d62-7c81-8608-21527cc40489"}`;
+    const metrics = parseEventStream(`${THREAD_STARTED}\n${other}`);
+
+    expect(metrics.threadsAnnounced).toBe(2);
+    expect(metrics.threadId).toBe("019fab0d-6d23-7843-a421-2fec40fbc98c");
+  });
+
+  it("does not count a malformed thread.started with no id", () => {
+    expect(parseEventStream(`{"type":"thread.started"}`).threadsAnnounced).toBe(0);
+  });
+});
