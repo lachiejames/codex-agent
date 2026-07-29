@@ -126,11 +126,11 @@ codex-agent/
 The tool is three decisions layered, and each has its own module and its own header comment
 recording the measured failure it came from. Read the header before changing any of them.
 
-| Module              | Decides                                                                          |
-| ------------------- | -------------------------------------------------------------------------------- |
+| Module              | Decides                                                                           |
+| ------------------- | --------------------------------------------------------------------------------- |
 | `src/contract.ts`   | whether a call may **start** — scope rule, breadth guard, bypass ratchet, verdict |
-| `src/bounds.ts`     | whether a running turn may **continue** — continue, warn, or kill                |
-| `src/supervisor.ts` | who is **awake** to act on that decision while a turn is in flight               |
+| `src/bounds.ts`     | whether a running turn may **continue** — continue, warn, or kill                 |
+| `src/supervisor.ts` | who is **awake** to act on that decision while a turn is in flight                |
 
 `bounds.ts` is one pure function with two consumers, deliberately: the supervisor can act on
 all three outcomes, an observing CLI command can act only on `kill`. Two decision sites would
@@ -140,7 +140,7 @@ Three things are deliberately **not** bounded, each because the evidence refuses
 
 - **No token ceiling.** Over 87 recorded runs, the plan judged excellent cost 13.7M tokens
   and the one judged a catastrophe cost 2.8M. No ceiling separates them.
-- **No zero-exec fail-fast.** `execCount: 0` is the *healthy* signature of a scoped pass —
+- **No zero-exec fail-fast.** `execCount: 0` is the _healthy_ signature of a scoped pass —
   the shaped prompt tells the agent not to read other files.
 - **No single-signal stall rule.** The runaway backstop fires only when events, tokens and
   completed turns are all flat together for 10 minutes. It is a hang detector, not a budget.
@@ -159,13 +159,13 @@ Shell wrapper. Resolves its own directory through symlinks — this repo is reac
 Model, reasoning effort, sandbox, jobs directory. Every value is a deliberate local override
 of upstream:
 
-| Value                    | Set to           | Why                                                |
-| ------------------------ | ---------------- | -------------------------------------------------- |
-| `model`                  | `gpt-5.6-sol`    | strongest available; passed as `-c model=`         |
-| `defaultReasoningEffort` | `xhigh`          | never lowered as a cost control                    |
-| `defaultSandbox`         | `read-only`      | Codex plans, it does not write                     |
-| `jobsDir`                | `~/.codex-agent/jobs` | every run artifact lives here                 |
-| `runsListLimit`          | `20`             | rows shown by `runs` / `ledger` without `--all`    |
+| Value                    | Set to                | Why                                             |
+| ------------------------ | --------------------- | ----------------------------------------------- |
+| `model`                  | `gpt-5.6-sol`         | strongest available; passed as `-c model=`      |
+| `defaultReasoningEffort` | `xhigh`               | never lowered as a cost control                 |
+| `defaultSandbox`         | `read-only`           | Codex plans, it does not write                  |
+| `jobsDir`                | `~/.codex-agent/jobs` | every run artifact lives here                   |
+| `runsListLimit`          | `20`                  | rows shown by `runs` / `ledger` without `--all` |
 
 There is **no timeout default here, or anywhere.** `--timeout <minutes>` is required on every
 launch; omitting it is a contract refusal. A default a machine caller inherits silently is not
@@ -292,12 +292,12 @@ non-empty line buried `Not inside a trusted directory` behind progress chatter.
 
 What the short-lived CLI process calls.
 
-| Export         | Does                                                                         |
-| -------------- | ---------------------------------------------------------------------------- |
-| `launchRun`    | write the record, spawn a `detached` + `unref`ed supervisor with `stdio: "ignore"` |
-| `sendToRun`    | supervisor alive → write a steer file; supervisor gone → start one whose first invocation *is* the message |
-| `refreshRun`   | re-derive state from files, then apply the bound (**the backstop**)          |
-| `killRun`      | SIGTERM the Codex process and the supervisor, record it                      |
+| Export       | Does                                                                                                       |
+| ------------ | ---------------------------------------------------------------------------------------------------------- |
+| `launchRun`  | write the record, spawn a `detached` + `unref`ed supervisor with `stdio: "ignore"`                         |
+| `sendToRun`  | supervisor alive → write a steer file; supervisor gone → start one whose first invocation _is_ the message |
+| `refreshRun` | re-derive state from files, then apply the bound (**the backstop**)                                        |
+| `killRun`    | SIGTERM the Codex process and the supervisor, record it                                                    |
 
 `refreshRun` is why a bound cannot vanish with a process. A supervisor can die — machine
 sleep, OOM, an errant pkill — so every observing command re-folds the stream and applies the
@@ -323,7 +323,7 @@ the job record.
 
 `report.ts` owns the **judgement** — how a finished run should be read — and is pure and
 table-tested. Ordering matters: a breach is reported before a missing verdict, because a run
-killed at its bound has no verdict *because* it was killed, and the two remedies point
+killed at its bound has no verdict _because_ it was killed, and the two remedies point
 opposite ways.
 
 `run-report.ts` maps a `Run` onto the ledger row and the report shape, and formats the
@@ -356,19 +356,19 @@ on every filesystem.
 Commands, flags, printing. Deliberately thin: the contract, the bound decision and the process
 that enforces both live elsewhere.
 
-| Command                            | Does                                                   |
-| ---------------------------------- | ------------------------------------------------------ |
-| `start "prompt" --timeout <min>`   | apply the contract, shape the prompt, launch            |
-| `status <id> [--json]`             | what it is doing right now                              |
-| `await <id>` (alias `await-turn`)  | block until the current turn concludes                  |
-| `send <id> "message"`              | interrupt an in-flight turn, or continue an idle one     |
-| `tail <id> [n]` (alias `capture`)  | last n lines of the raw JSONL event stream (default 40) |
-| `report <id> [--json]`             | asked / answered / ledger / judgement                   |
-| `runs [--json] [--all]` (alias `jobs`) | list runs                                           |
-| `ledger [--json]`                  | duration, SPENT, CUM-IN, execs, scoped, bypass, outcome |
-| `kill <id>`                        | stop a run and its supervisor                           |
-| `clean`                            | delete runs older than 7 days                           |
-| `health`                           | `codex --version`                                       |
+| Command                                | Does                                                    |
+| -------------------------------------- | ------------------------------------------------------- |
+| `start "prompt" --timeout <min>`       | apply the contract, shape the prompt, launch            |
+| `status <id> [--json]`                 | what it is doing right now                              |
+| `await <id>` (alias `await-turn`)      | block until the current turn concludes                  |
+| `send <id> "message"`                  | interrupt an in-flight turn, or continue an idle one    |
+| `tail <id> [n]` (alias `capture`)      | last n lines of the raw JSONL event stream (default 40) |
+| `report <id> [--json]`                 | asked / answered / ledger / judgement                   |
+| `runs [--json] [--all]` (alias `jobs`) | list runs                                               |
+| `ledger [--json]`                      | duration, SPENT, CUM-IN, execs, scoped, bypass, outcome |
+| `kill <id>`                            | stop a run and its supervisor                           |
+| `clean`                                | delete runs older than 7 days                           |
+| `health`                               | `codex --version`                                       |
 
 `prepareLaunch` is the single launch path, so there is no way to reach Codex while skipping the
 gate. It checks `--timeout` **first**, so the refusal is identical whether or not the rest of
