@@ -1,4 +1,5 @@
 {
+  "description": "Delegate scoped, bounded tasks to OpenAI Codex agents under an enforced invocation contract. Hard fork of Bootoshi/codex-orchestrator.",
   "metadata": {
     "description": "Delegate scoped, bounded tasks to OpenAI Codex agents via tmux sessions. Hard fork of Bootoshi/codex-orchestrator with an enforced invocation contract.",
     "version": "2.0.0"
@@ -12,7 +13,7 @@
     {
       "category": "developer tools",
       "description": "Orchestrate OpenAI Codex agents from Claude Code. Spawns parallel agents under an invocation contract that refuses unscoped reviews, bounds every run with a timeout, and reports non-convergence instead of burning hours silently.",
-      "keywords": ["codex", "orchestration", "agents", "tmux", "parallel", "delegation", "review"],
+      "keywords": ["codex", "orchestration", "agents", "parallel", "delegation", "review", "supervised"],
       "name": "codex-agent",
       "source": "./plugins/codex-agent",
       "version": "2.0.0"

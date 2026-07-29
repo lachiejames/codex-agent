@@ -3,6 +3,6 @@
     "name": "lachiejames",
     "url": "https://github.com/lachiejames"
   },
-  "description": "Orchestrate OpenAI Codex agents from Claude Code via tmux sessions, under an enforced invocation contract",
+  "description": "Orchestrate OpenAI Codex agents from Claude Code under an enforced invocation contract, with a supervisor that can steer a running pass",
   "name": "codex-agent"
 }
