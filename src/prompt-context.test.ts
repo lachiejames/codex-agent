@@ -126,8 +126,10 @@ describe("assemblePromptContext", () => {
     expect(built.accounting.map.included).toBe(true);
     expect(built.accounting.map.path).toBe("/repo/docs/CODEBASE_MAP.md");
     expect(built.accounting.components.map((c) => c.kind)).toEqual(["map_wrapper", "codebase_map", "task_prompt"]);
-    expect(built.prompt.endsWith("do the thing")).toBe(true);
-    expect(built.prompt).toContain("# Map\n");
+    // The EXACT assembled prompt, not endsWith plus toContain. Those two together still admit
+    // arbitrary text between the map and the task prompt, which an adversarial review of this
+    // diff pointed out — a prompt of "# Map\nUNEXPECTED JUNK\ndo the thing" satisfied both.
+    expect(built.prompt).toBe("## Codebase Map\n\n# Map\n\n\n---\n\ndo the thing");
   });
 
   test("accounts the task prompt separately from the whole prompt", () => {

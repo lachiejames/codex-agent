@@ -150,3 +150,36 @@ describe("formatFindings", () => {
     expect(report).toContain("src/b.ts:1  [bare-builtin-import]");
   });
 });
+
+describe("normaliseBody, via the duplicate rule", () => {
+  // Regression, from an adversarial review of this very checker. The first implementation stripped
+  // comments with a regex, which ate the `//` inside a URL string literal: both bodies below
+  // normalised to `consthost="https:` and were reported as one duplicated implementation.
+  it("does not treat two different URL literals as the same implementation", () => {
+    const withHost = (host: string): string =>
+      `export function fetchStatus(): string {\n` +
+      `  const host = "${host}";\n` +
+      `  const path = "/status";\n` +
+      `  return host + path;\n` +
+      `}\n`;
+    const findings = scanConventions([
+      src(withHost("https://alpha.example"), "src/a.ts"),
+      src(withHost("https://beta.example"), "src/b.ts"),
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it("still collides two bodies that differ only by a comment", () => {
+    const bare = `export function tally(): number {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n`;
+    const noted = `export function tally(): number {\n  const a = 1; // the first\n  const b = 2;\n  return a + b;\n}\n`;
+    const findings = scanConventions([src(bare, "src/a.ts"), src(noted, "src/b.ts")]);
+    expect(findings.length).toBe(1);
+    expect(findings[0]?.rule).toBe("duplicate-export");
+  });
+
+  it("does not treat a comment inside a string as a comment", () => {
+    const one = `export function note(): string {\n  const a = "// not a comment";\n  const b = 2;\n  return a + b;\n}\n`;
+    const two = `export function note(): string {\n  const a = "// also not a comment";\n  const b = 2;\n  return a + b;\n}\n`;
+    expect(scanConventions([src(one, "src/a.ts"), src(two, "src/b.ts")])).toEqual([]);
+  });
+});

@@ -140,17 +140,29 @@ function findBareBuiltins(sf: ts.SourceFile, input: SourceInput): readonly Findi
 /**
  * A function body reduced to what it DOES, so two spellings of one implementation collide.
  *
- * Comments go, all whitespace goes, and digit-separating underscores go. That last one is not
+ * Comments and whitespace go, and digit-separating underscores go. That last one is not
  * incidental: the two copies of `formatElapsed` were identical except that one wrote `60_000`
  * and the other `60000`. A comparison that treats those as different text would have missed the
  * only real instance of this defect the repo has had.
+ *
+ * TOKENISED, NOT REGEXED, and this file's own review is why. The first version stripped comments
+ * with a regex matching two slashes to end of line, which does not know what a string literal is
+ * — so `const host = "https://alpha.example";` had `//alpha.example";` eaten as a comment, and two
+ * functions differing ONLY in their URLs both normalised to `consthost="https:` and were reported
+ * as duplicates. An adversarial review pass produced exactly that counterexample, which is now
+ * the regression test below. The scanner treats a string literal as one token, so its contents
+ * can never be mistaken for syntax; `skipTrivia` drops comments and whitespace for free.
  */
 function normaliseBody(body: string): string {
-  return body
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/[^\n]*/g, "")
-    .replace(/(\d)_(\d)/g, "$1$2")
-    .replace(/\s+/g, "");
+  const scanner = ts.createScanner(ts.ScriptTarget.ESNext, /* skipTrivia */ true, ts.LanguageVariant.Standard, body);
+  const parts: string[] = [];
+
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    const text = scanner.getTokenText();
+    parts.push(token === ts.SyntaxKind.NumericLiteral ? text.replaceAll("_", "") : text);
+  }
+
+  return parts.join("");
 }
 
 /** Exported function declarations in this file, as name plus normalised body. */
